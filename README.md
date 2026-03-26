@@ -2,7 +2,7 @@
 
 > **Language / اللغة:** The **default** README is **English** (Part I). **Full Arabic** documentation is in **Part II** — [انتقل إلى العربية](#part-ii--arabic-documentation-العربية) · [Jump to Arabic](#part-ii--arabic-documentation-العربية).
 
-[![CI](https://github.com/YOUR_GITHUB_USER/YOUR_REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_GITHUB_USER/YOUR_REPO/actions/workflows/ci.yml)
+[![CI](https://github.com/code-root/emulator-android/actions/workflows/ci.yml/badge.svg)](https://github.com/code-root/emulator-android/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688?logo=fastapi&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
@@ -314,12 +314,12 @@ Licensed under the [MIT License](LICENSE) unless third-party files state otherwi
 ### Publishing to GitHub
 
 ```bash
-git remote add origin https://github.com/YOUR_USER/YOUR_REPO.git
+git remote add origin https://github.com/code-root/emulator-android.git
 git branch -M main
 git push -u origin main
 ```
 
-Replace `YOUR_GITHUB_USER` / `YOUR_REPO` in the CI badge at the top.
+CI badge points to **`code-root/emulator-android`**; change it if you fork under another user/org.
 
 ---
 
@@ -582,9 +582,9 @@ cd frontend && npm install && npm run dev
 ### الرفع إلى GitHub
 
 ```bash
-git remote add origin https://github.com/YOUR_USER/YOUR_REPO.git
+git remote add origin https://github.com/code-root/emulator-android.git
 git branch -M main
 git push -u origin main
 ```
 
-استبدل شارة CI أعلاه باسم المستخدم والمستودع.
+شارة CI تشير إلى **code-root/emulator-android**؛ غيّرها عند الفورك.
