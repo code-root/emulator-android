@@ -8,7 +8,16 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-VERSION="${RELEASE_VERSION:-$(date +%Y%m%d-%H%M)}"
+# RELEASE_VERSION may be git tag e.g. v1.2.0 — strip leading "v"
+_raw="${RELEASE_VERSION:-}"
+if [[ -n "${_raw}" ]]; then
+  VERSION="${_raw#v}"
+else
+  VERSION="$(tr -d ' \n\r' < "${ROOT}/VERSION" 2>/dev/null || true)"
+  if [[ -z "${VERSION}" ]]; then
+    VERSION="$(date +%Y%m%d-%H%M)"
+  fi
+fi
 OUT_DIR="${RELEASE_OUT_DIR:-$ROOT/dist}"
 mkdir -p "$OUT_DIR"
 ARCHIVE="$OUT_DIR/emulator-android-${VERSION}.tar.gz"

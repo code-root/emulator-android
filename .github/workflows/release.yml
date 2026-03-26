@@ -1,0 +1,58 @@
+# عند دفع وسم إصدار v* يُبنى أرشيف التوزيع ويُرفَق بـ GitHub Release
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package-and-release:
+    name: Build tarball & publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Sync VERSION from tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "$TAG" > VERSION
+          echo "VERSION=$TAG" >> "$GITHUB_ENV"
+
+      - name: Build distribution tarball
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: ./scripts/package_release.sh
+
+      - name: Build Python wheel (optional artifact)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: pip wheel
+        run: python -m pip install build && python -m build --wheel --outdir dist-wheel .
+        continue-on-error: false
+
+      - name: Create GitHub Release with assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/emulator-android-*.tar.gz
+            dist-wheel/*.whl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

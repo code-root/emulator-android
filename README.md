@@ -35,8 +35,9 @@ Web-based **Android Virtual Device (AVD) farm**: create emulated devices, **uniq
 12. [CI](#ci)
 13. [Maintainer, company & contact](#maintainer-company--contact)
 14. [Support this project (optional)](#support-this-project-optional)
-15. [License](#license)
-16. [Publishing to GitHub](#publishing-to-github)
+15. [Python package, tarball & releases](#python-package-tarball--releases)
+16. [License](#license)
+17. [Publishing to GitHub](#publishing-to-github)
 
 ---
 
@@ -305,6 +306,37 @@ Same **BSC (BEP-20)** address as in the table above: `0x94c5005229784d9b7df4e7a7
 
 ---
 
+### Python package, tarball & releases
+
+| Artifact | Purpose |
+|----------|---------|
+| [`pyproject.toml`](pyproject.toml) | Python project **emulator-android-farm**; dependencies mirror [`backend/requirements.txt`](backend/requirements.txt). |
+| [`VERSION`](VERSION) | Current semver; overwritten from the git tag (`v1.2.3` → `1.2.3`) during the **Release** workflow. |
+| [`CHANGELOG.md`](CHANGELOG.md) | Human-readable release notes. |
+| **Wheel** | `pip install build && python -m build --wheel .` → `dist/*.whl` (CI job **packaging** validates this). |
+| **Source tarball** | [`scripts/package_release.sh`](scripts/package_release.sh) — builds the frontend and writes `dist/emulator-android-<version>.tar.gz` (excludes `node_modules`, `.venv`, large firmware ZIPs). |
+
+**Cut a new release** (creates/updates a [GitHub Release](https://github.com/code-root/emulator-android/releases) with tarball + wheel):
+
+```bash
+# bump VERSION and CHANGELOG.md, then:
+git add VERSION CHANGELOG.md
+git commit -m "chore: release v1.0.1"
+git tag v1.0.1
+git push origin main && git push origin v1.0.1
+```
+
+Workflow: [`.github/workflows/release.yml`](.github/workflows/release.yml) (on push to tag `v*`).
+
+**Install backend from a git checkout:**
+
+```bash
+pip install .
+# run API (from repo): cd backend && uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+---
+
 ### License
 
 Licensed under the [MIT License](LICENSE) unless third-party files state otherwise.
@@ -343,8 +375,9 @@ CI badge points to **`code-root/emulator-android`**; change it if you fork under
 12. [الـ CI](#الـ-ci)
 13. [الصيانة والاتصال](#الصيانة-والاتصال)
 14. [دعم المشروع](#دعم-المشروع)
-15. [الترخيص](#الترخيص)
-16. [الرفع إلى GitHub](#الرفع-إلى-github)
+15. [الحزمة والإصدارات](#الحزمة-والإصدارات)
+16. [الترخيص](#الترخيص)
+17. [الرفع إلى GitHub](#الرفع-إلى-github)
 
 ---
 
@@ -570,6 +603,25 @@ cd frontend && npm install && npm run dev
 | ![USDT BSC QR](assets/usdt-bsc-qr.jpeg) | ![BTC BSC QR](assets/btc-bsc-qr.jpeg) |
 
 نفس تحذيرات الشبكة والعنوان أعلاه. **ملاحظة:** إحدى الصورتين لإيداع **USDT** على BSC والثانية لـ **BTC على BSC** (Binance-Peg)، وليست تحويل بيتكوين على سلسلة Bitcoin الأصلية. التفاصيل: [`assets/README.md`](assets/README.md).
+
+---
+
+### الحزمة والإصدارات
+
+- **`pyproject.toml`:** حزمة بايثون باسم **`emulator-android-farm`** — من جذر المشروع: `pip install .` (المتطلبات من `backend/requirements.txt`).
+- **`VERSION`:** رقم الإصدار؛ يُحدَّث من وسم Git `v*` عند workflow الإصدار.
+- **`CHANGELOG.md`:** سجل التغييرات.
+- **`scripts/package_release.sh`:** بناء الواجهة + أرشيف `dist/emulator-android-<version>.tar.gz`.
+- **GitHub Release:** [`.github/workflows/release.yml`](.github/workflows/release.yml) عند دفع وسم `v*` يُرفق **الأرشيف + ملف wheel**.
+
+إصدار جديد:
+
+```bash
+git add VERSION CHANGELOG.md
+git commit -m "chore: release v1.0.1"
+git tag v1.0.1
+git push origin main && git push origin v1.0.1
+```
 
 ---
 

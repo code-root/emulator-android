@@ -1,0 +1,44 @@
+# Install from repo root: pip install .
+# Run API: cd backend && uvicorn main:app (or set PYTHONPATH after install)
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emulator-android-farm"
+dynamic = ["version", "dependencies"]
+description = "Android AVD farm — FastAPI backend for emulators, fingerprints, WebSocket mirror, APK store"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Mostafa El-Bagory" }]
+maintainers = [{ name = "Storage TE" }]
+keywords = ["android", "emulator", "avd", "adb", "fastapi"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Framework :: FastAPI",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/code-root/emulator-android"
+Repository = "https://github.com/code-root/emulator-android"
+Changelog = "https://github.com/code-root/emulator-android/blob/main/CHANGELOG.md"
+
+[tool.setuptools.dynamic]
+version = { file = ["VERSION"] }
+dependencies = { file = ["backend/requirements.txt"] }
+
+[tool.setuptools.package-dir]
+"" = "backend"
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+exclude = ["tests*"]
+
+[tool.setuptools]
+py-modules = ["main", "config"]
