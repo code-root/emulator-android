@@ -1,4 +1,6 @@
-# Android Emulator Farm — مزرعة محاكيات أندرويد
+# Android Emulator Farm
+
+> **Language / اللغة:** The **default** README is **English** (Part I). **Full Arabic** documentation is in **Part II** — [انتقل إلى العربية](#part-ii--arabic-documentation-العربية) · [Jump to Arabic](#part-ii--arabic-documentation-العربية).
 
 [![CI](https://github.com/YOUR_GITHUB_USER/YOUR_REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_GITHUB_USER/YOUR_REPO/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)
@@ -8,50 +10,360 @@
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-**English:** Web-based **Android Virtual Device (AVD) farm**: create devices, unique fingerprints per instance, start/stop emulators, live screen over WebSocket (JPEG), touch/drag via ADB, APK store, proxy config, SAMFW firmware alignment, REST + OpenAPI.
+Web-based **Android Virtual Device (AVD) farm**: create emulated devices, **unique fingerprints** per instance, start/stop, **live screen** over WebSocket (JPEG), **touch/drag** via ADB, **APK store**, HTTP/SOCKS proxy, **SAMFW** firmware alignment presets, REST API + OpenAPI/Swagger.
 
-**العربية:** منصة متكاملة لإدارة **محاكيات Android (AVD)** من المتصفح وواجهة REST: إنشاء أجهزة، **بصمة جهاز مستقلة** لكل محاكي، تشغيل/إيقاف، **بث شاشة حي** عبر WebSocket، تحكم لمسي عبر ADB، **مستودع APK**، إعداد بروكسي، مواءمة حزم **SAMFW**، ووثائق OpenAPI.
-
-> **اقتراح لوصف مستودع GitHub (About):**  
-> *Android AVD farm — FastAPI + React: live WebSocket mirror, ADB input, per-device fingerprint spoofing, APK store, proxy, Docker, SAMFW presets.*
+**Suggested GitHub “About” description:**  
+*Android AVD farm — FastAPI + React: live WebSocket mirror, ADB input, per-device fingerprint spoofing, APK store, proxy, Docker, SAMFW presets.*
 
 ---
 
-## جدول المحتويات
+## Part I — English (default)
+
+### Table of contents
+
+1. [Overview & how it works](#overview--how-it-works)
+2. [Architecture diagram](#architecture-diagram)
+3. [Live stream & control flow](#live-stream--control-flow)
+4. [Device lifecycle](#device-lifecycle)
+5. [Features (current release)](#features-current-release)
+6. [Tech stack](#tech-stack)
+7. [Quick start](#quick-start)
+8. [REST API & WebSocket](#rest-api--websocket)
+9. [SAMFW packages & fingerprint](#samfw-packages--fingerprint)
+10. [V2 Pro — USD 1,000](#v2-pro--usd-1000)
+11. [Suggested GitHub Topics](#suggested-github-topics)
+12. [CI](#ci)
+13. [Maintainer, company & contact](#maintainer-company--contact)
+14. [Support this project (optional)](#support-this-project-optional)
+15. [License](#license)
+16. [Publishing to GitHub](#publishing-to-github)
+
+---
+
+### Overview & how it works
+
+The stack splits **control plane** (FastAPI + DB + scheduler), **web UI** (React + Vite), and an **ADB client** on the server talking to emulators or attached devices.
+
+- Users authenticate and receive a **JWT**.
+- **Devices** are stored in the DB per owner; each device has a **fingerprint** profile and optional **proxy**.
+- **Start** launches an **emulator (AVD)** or binds an **ADB serial**; ports/IDs are persisted for control.
+- **Live screenshots:** the browser subscribes via WebSocket (`subscribe_screenshots`); the server runs `adb screencap` (per-device locking to avoid races), optionally encodes **JPEG**, sends Base64 JSON with **device_width / device_height** for correct touch mapping.
+- **Touch & drag:** the UI sends `tap` / `swipe` over WebSocket; messages go through a **control queue drained before** the next screencap so long captures do not starve input. **Chained swipe segments** can be **coalesced** server-side into one logical `swipe` (fewer ADB round-trips, same end-to-end path).
+- **APK store:** upload packages and install on running devices via ADB, including **split APK** flows (`install-multiple`) where applicable.
+
+Extended spec: [`docs/REFERENCE_SPEC.md`](docs/REFERENCE_SPEC.md).
+
+---
+
+### Architecture diagram
+
+```mermaid
+flowchart TB
+  subgraph Client["Browser — React SPA"]
+    UI[Dashboard / Devices / App Store / Device Detail]
+    WS[WebSocket client]
+    API[REST + JWT]
+  end
+
+  subgraph Server["Server — FastAPI"]
+    AUTH[Auth / Users]
+    DEV[Devices API]
+    FP[Fingerprint]
+    STORE[APK Store]
+    PROXY[Proxy]
+    ORCH[ADB orchestrator + WS handler]
+    SCH[Scheduler]
+  end
+
+  subgraph Data["Data"]
+    DB[(PostgreSQL / SQLite)]
+    FS[Uploads / firmware]
+  end
+
+  subgraph Runtime["Runtime"]
+    ADB[ADB / emulator]
+    AVD[AVD instances]
+  end
+
+  UI --> API
+  UI --> WS
+  API --> AUTH
+  API --> DEV
+  API --> FP
+  API --> STORE
+  WS --> ORCH
+  DEV --> DB
+  FP --> DB
+  STORE --> FS
+  ORCH --> ADB
+  SCH --> DEV
+  ADB --> AVD
+```
+
+---
+
+### Live stream & control flow
+
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant W as WebSocket /ws
+  participant Q as Control queue
+  participant A as ADBTool
+
+  B->>W: subscribe_screenshots + interval_ms
+  loop Live stream
+    W->>A: screencap
+    A-->>W: PNG bytes
+    W-->>B: screenshot JSON base64 + device_width/height
+  end
+  B->>W: tap / swipe / keyevent
+  W->>Q: enqueue control
+  Note over W,Q: Queue drained before next screenshot
+  Q->>A: input tap | swipe (coalesced when chained)
+  A-->>W: command completes
+```
+
+---
+
+### Device lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> created: Create device
+  created --> booting: Start
+  booting --> running: Emulator ready + adb
+  running --> stopped: Stop
+  stopped --> booting: Start
+  booting --> error: Failure
+  running --> error: Runtime failure
+  error --> stopped: Manual fix / Stop
+```
+
+---
+
+### Features (current release)
+
+| Area | Description |
+|------|-------------|
+| **Device management** | CRUD-style lifecycle, RAM/CPU/API level, AVD name + ADB serial |
+| **Per-device fingerprint** | IMEI, Android ID, build fingerprint, model/network/geo, Samsung AP/CSC, `setprop` where allowed |
+| **Web UI** | Dashboard, devices, device detail (screen, fingerprint, apps, proxy, logs), **App Store** |
+| **Screen mirror** | WebSocket, configurable JPEG, idle-frame deduplication (project settings) |
+| **Input** | Tap, multi-segment drag, system keys, `input text` via ADB |
+| **Network** | HTTP / SOCKS5 proxy configuration (per implementation) |
+| **SAMFW** | Discover packages under `firmware/`, suggested presets, fingerprint alignment |
+| **Security** | JWT, user/admin roles, device ownership |
+| **Docker** | Compose stack with Postgres / Redis / Nginx |
+| **CI** | GitHub Actions: backend, frontend, compose validation |
+
+---
+
+### Tech stack
+
+| Layer | Stack |
+|-------|--------|
+| Backend | Python 3.11+, FastAPI, SQLAlchemy async, Pydantic, Uvicorn |
+| Database | PostgreSQL (prod) / SQLite + aiosqlite (local dev via `scripts/run_dev_local.sh`) |
+| Frontend | React 18, TypeScript, Vite, Tailwind, React Router, TanStack Query, Zustand |
+| DevOps | Docker Compose, Nginx, GitHub Actions |
+| Android | Android SDK, `emulator`, `adb`, AVD |
+
+---
+
+### Quick start
+
+**Docker (full stack):**
+
+```bash
+docker compose -f docker/docker-compose.yml up --build
+```
+
+UI is usually **http://localhost:8080**; API under **`/api/...`** (see `docker/` Nginx config).
+
+**Local dev (SQLite) script:**
+
+```bash
+./scripts/run_dev_local.sh
+```
+
+**Manual dev (short):**
+
+```bash
+cd backend && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && uvicorn main:app --reload --port 8000
+cd frontend && npm install && npm run dev
+```
+
+**Release tarball:**
+
+```bash
+./scripts/package_release.sh
+```
+
+---
+
+### REST API & WebSocket
+
+- **REST:** `Authorization: Bearer <token>` after `/api/auth/login` — interactive docs at `/docs` (Swagger).
+- **WebSocket:** `ws://<host>/ws/{device_id}?token=<jwt>` — screenshot subscription, `tap` / `swipe` / `keyevent` / `input_text`.
+
+Full endpoint matrix: [`docs/REFERENCE_SPEC.md`](docs/REFERENCE_SPEC.md).
+
+---
+
+### SAMFW packages & fingerprint
+
+Place SAMFW-style ZIPs under [`firmware/`](firmware/) and follow [`firmware/README.md`](firmware/README.md). Large binaries are **gitignored** by default.
+
+---
+
+### V2 Pro — USD 1,000
+
+**V2 Pro** targets teams that need **higher performance, broader operations, and commercial support**. Reference price: **USD 1,000** (scope & licensing negotiable — contact below).
+
+| Capability | Benefit |
+|------------|---------|
+| **Low-latency video path** | **gRPC / WebRTC** (scrcpy / EmulatorController style) for local emulators — closer to real-time than ADB screencap alone |
+| **Advanced touch** | Richer touch streams (pressure, multi-touch where applicable) beyond `input swipe` only |
+| **Multi-tenant** | Isolation, quotas, usage-based billing |
+| **RBAC** | Fine-grained roles for devices and stores |
+| **Session replay** | Record/replay for QA, audit, training |
+| **Multi-node farm** | Scheduling across hosts, health-aware queues |
+| **Observability** | Grafana/Prometheus — FPS, frame latency, ADB time, CPU/RAM per device |
+| **Webhooks & automation** | Device events to CI/CD, Slack, Discord |
+| **Pro fingerprint packs** | Curated templates per market/chipset |
+| **Secrets & encryption** | Secret manager integration, field-level encryption, key rotation |
+| **White-label** | Branding, theme, custom domain |
+| **Priority support & SLA** | Production response-time agreements |
+
+> V2 is not automatically open-sourced in this repo; commercial terms via contact channels below.
+
+---
+
+### Suggested GitHub Topics
+
+```
+android
+android-emulator
+avd
+adb
+fastapi
+react
+typescript
+websocket
+docker
+docker-compose
+postgresql
+sqlite
+fingerprint
+device-farm
+remote-control
+apk
+samfw
+devops
+openapi
+jwt
+```
+
+---
+
+### CI
+
+Workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml): backend install + `compileall` + FastAPI import; frontend `npm ci`/`npm install` + build; Docker Compose validation.
+
+---
+
+### Maintainer, company & contact
+
+| | |
+|--|--|
+| **Developer** | Mostafa El-Bagory |
+| **Company** | Storage TE |
+| **WhatsApp** | +20 100 199 5914 |
+
+---
+
+### Support this project (optional)
+
+If this documentation (or related private tooling) is useful to you, **optional** support helps maintain and improve it. Pick whatever works best for you.
+
+| Channel | How to support |
+|---------|----------------|
+| **PayPal** | [paypal.me/sofaapi](https://paypal.me/sofaapi) |
+| **Binance Pay / UID** | **1138751298** — send from the Binance app (Pay / internal transfer when available). |
+| **Binance — deposit (web)** | Sign in, pick the asset, then **BSC (BEP20)** for deposit. |
+| **BSC address (copy)** | `0x94c5005229784d9b7df4e7a7a0c3b25a08fd57bc` |
+| **Network** | Use **BSC (BEP-20) only**. This address is for **USDT (BEP-20)** and **BTC on BSC** (Binance-Peg / in-app “BTC” on BSC), matching typical Binance deposit screens. **Do not** send native on-chain Bitcoin, ERC-20, or NFTs to this address. |
+
+**Deposit QR (scan in Binance or any BSC wallet):**
+
+| USDT · BSC (BEP-20) | BTC · BSC (Binance-Peg) |
+|---------------------|-------------------------|
+| ![USDT BSC QR](assets/usdt-bsc-qr.jpeg) | ![BTC BSC QR](assets/btc-bsc-qr.jpeg) |
+
+Same **BSC (BEP-20)** address as in the table above: `0x94c5005229784d9b7df4e7a7a0c3b25a08fd57bc`. **Note:** one QR is for **USDT** on BSC, the other for **BTC on BSC** (Binance-Peg) — not native on-chain Bitcoin. See [`assets/README.md`](assets/README.md).
+
+---
+
+### License
+
+Licensed under the [MIT License](LICENSE) unless third-party files state otherwise.
+
+---
+
+### Publishing to GitHub
+
+```bash
+git remote add origin https://github.com/YOUR_USER/YOUR_REPO.git
+git branch -M main
+git push -u origin main
+```
+
+Replace `YOUR_GITHUB_USER` / `YOUR_REPO` in the CI badge at the top.
+
+---
+
+## Part II — Arabic documentation (العربية)
+
+> **الجزء الثاني:** نسخة عربية كاملة من نفس المحتوى. **الجزء الأول أعلاه بالإنجليزية هو الافتراضي على GitHub.**
+
+### جدول المحتويات (عربي)
 
 1. [نظرة عامة وآلية العمل](#نظرة-عامة-وآلية-العمل)
-2. [رسم توضيحي — البنية المعمارية](#رسم-توضيحي--البنية-المعمارية)
-3. [رسم توضيحي — تدفق البث والتحكم](#رسم-توضيحي--تدفق-البث-والتحكم)
-4. [رسم توضيحي — دورة حياة الجهاز](#رسم-توضيحي--دورة-حياة-الجهاز)
-5. [المميزات (الإصدار الحالي)](#المميزات-الإصدار-الحالي)
+2. [رسم — البنية المعمارية](#رسم--البنية-المعمارية)
+3. [رسم — تدفق البث والتحكم](#رسم--تدفق-البث-والتحكم)
+4. [رسم — دورة حياة الجهاز](#رسم--دورة-حياة-الجهاز)
+5. [المميزات](#المميزات)
 6. [المكدس التقني](#المكدس-التقني)
 7. [التشغيل السريع](#التشغيل-السريع)
-8. [واجهات API و WebSocket](#واجهات-api-و-websocket)
-9. [حزم SAMFW والبصمة](#حزم-samfw-والبصمة)
-10. [النسخة المطوّرة V2 Pro — 1,000 USD](#النسخة-المطوّرة-v2-pro--1000-usd)
-11. [GitHub Topics (وسوم مقترحة)](#github-topics-وسوم-مقترحة)
-12. [الصيانة والشركة والاتصال](#الصيانة-والشركة-والاتصال)
-13. [دعم المشروع (اختياري)](#دعم-المشروع-اختياري)
-14. [الترخيص](#الترخيص)
+8. [API و WebSocket](#api-و-websocket)
+9. [SAMFW والبصمة](#samfw-والبصمة)
+10. [V2 Pro — 1,000 USD](#v2-pro--1000-usd)
+11. [وسوم GitHub](#وسوم-github)
+12. [الـ CI](#الـ-ci)
+13. [الصيانة والاتصال](#الصيانة-والاتصال)
+14. [دعم المشروع](#دعم-المشروع)
+15. [الترخيص](#الترخيص)
+16. [الرفع إلى GitHub](#الرفع-إلى-github)
 
 ---
 
-## نظرة عامة وآلية العمل
+### نظرة عامة وآلية العمل
 
-المشروع يفصل بين **طبقة التحكم** (FastAPI + قاعدة بيانات + مجدول) و**واجهة المستخدم** (React + Vite) و**عميل ADB** على الخادم الذي يتحدث مع المحاكيات أو الأجهزة المتصلة.
+المشروع يفصل **طبقة التحكم** (FastAPI + قاعدة بيانات + مجدول) و**واجهة المستخدم** (React + Vite) و**عميل ADB** على الخادم.
 
-- المستخدم يسجّل الدخول ويحصل على **JWT**.
-- تُنشأ **أجهزة (Device)** في قاعدة البيانات مرتبطة بمستخدم؛ لكل جهاز سجل **بصمة (Fingerprint)** واختياريًا **بروكسي**.
-- عند **Start** يشغّل الخادم عملية **emulator** (AVD) أو يربط **ADB serial** حسب الإعداد؛ يُخزَّن المنفذ/المعرّف للتحكم لاحقًا.
-- **لقطات الشاشة الحية**: عميل WebSocket يشترك في `subscribe_screenshots`؛ الخادم ينفّذ `adb screencap` (مع قفل لكل جهاز لتفادي التعارض)، يُحوّل الإطار إلى JPEG خفيف عند الطلب، ويرسله كـ Base64 مع أبعاد الجهاز لتعيين إحداثيات اللمس بشكل صحيح.
-- **اللمس والسحب**: الواجهة ترسل `tap` / `swipe` عبر WebSocket؛ الخادم يضع الرسائل في طابور **يُصفّى قبل** أخذ لقطة جديدة حتى لا تُحجب أوامر التحكم عن طريق screencap الطويل. على الخادم يمكن **دمج مقاطع السحب المتسلسلة** في أمر `swipe` واحد لتقليل استدعاءات ADB مع الحفاظ على نفس المسار الكلي.
-- **مستودع APK**: رفع حزم إلى التخزين وتثبيتها على جهاز شغّال عبر ADB (بما في ذلك دعم **split APKs** حيث يُطبّق المشروع منطق `install-multiple` عند الحاجة).
+- تسجيل الدخول و**JWT**.
+- **أجهزة** في قاعدة البيانات لكل مالك؛ **بصمة** و**بروكسي** اختياري.
+- **Start** يشغّل **emulator (AVD)** أو يربط **ADB serial**.
+- **بث الشاشة:** اشتراك WebSocket (`subscribe_screenshots`)، `adb screencap` مع قفل لكل جهاز، JPEG، Base64 مع أبعاد الجهاز لتحويل إحداثيات اللمس.
+- **لمس وسحب:** `tap` / `swipe` عبر WebSocket؛ **طابور تحكم** يُفرغ قبل اللقطة التالية؛ **دمج مقاطع السحب المتسلسلة** في `swipe` واحد عند الإمكان.
+- **مستودع APK:** رفع وتثبيت عبر ADB، بما في ذلك **split APKs** (`install-multiple`).
 
-مرجع مواصفات موسّع ومقارنة متطلبات: [`docs/REFERENCE_SPEC.md`](docs/REFERENCE_SPEC.md).
+مرجع موسّع: [`docs/REFERENCE_SPEC.md`](docs/REFERENCE_SPEC.md).
 
 ---
 
-## رسم توضيحي — البنية المعمارية
+### رسم — البنية المعمارية
 
 ```mermaid
 flowchart TB
@@ -98,7 +410,7 @@ flowchart TB
 
 ---
 
-## رسم توضيحي — تدفق البث والتحكم
+### رسم — تدفق البث والتحكم
 
 ```mermaid
 sequenceDiagram
@@ -122,7 +434,7 @@ sequenceDiagram
 
 ---
 
-## رسم توضيحي — دورة حياة الجهاز
+### رسم — دورة حياة الجهاز
 
 ```mermaid
 stateDiagram-v2
@@ -138,61 +450,49 @@ stateDiagram-v2
 
 ---
 
-## المميزات (الإصدار الحالي)
+### المميزات
 
 | المجال | الوصف |
 |--------|--------|
-| **إدارة الأجهزة** | إنشاء/قائمة/تشغيل/إيقاف، موارد (RAM/CPU/API)، ارتباط بـ AVD وADB serial |
-| **بصمة لكل جهاز** | IMEI، Android ID، build fingerprint، طراز، شبكة، موقع، حقول Samsung AP/CSC، تطبيق عبر `setprop` حيث يسمح النظام |
-| **واجهة ويب** | لوحة، أجهزة، تفاصيل جهاز (شاشة، بصمة، تطبيقات، بروكسي، سجلات)، **App Store** للـ APK |
-| **بث شاشة** | WebSocket، JPEG قابل للضبط، تقليل التكرار عند خمول الإطار (حسب إعدادات المشروع) |
-| **إدخال** | لمس، سحب متعدد المقاطع، أزرار نظام، إدخال نص عبر ADB |
-| **شبكة** | إعداد HTTP/SOCKS5 للجهاز (حسب تنفيذ المشروع) |
-| **حزم SAMFW** | اكتشاف الحزم تحت `firmware/` واقتراح presets ومواءمة حقول البصمة |
-| **أمان أساسي** | JWT، أدوار مستخدم/أدمن، امتلاك الأجهزة |
-| **Docker** | `docker-compose` للتشغيل المتكامل مع Postgres/Redis/Nginx |
-| **CI** | GitHub Actions: باكند، فرونت، التحقق من compose |
+| **إدارة الأجهزة** | إنشاء/قائمة/تشغيل/إيقاف، موارد، AVD وADB serial |
+| **بصمة لكل جهاز** | IMEI، Android ID، build fingerprint، Samsung AP/CSC، setprop حيث يسمح |
+| **واجهة ويب** | لوحة، أجهزة، تفاصيل، App Store |
+| **بث شاشة** | WebSocket، JPEG، تقليل التكرار عند الخمول |
+| **إدخال** | لمس، سحب متعدد المقاطع، أزرار نظام، نص |
+| **شبكة** | HTTP/SOCKS5 |
+| **SAMFW** | اكتشاف الحزم وpresets |
+| **أمان** | JWT، أدوار، امتلاك الأجهزة |
+| **Docker** | Compose كامل |
+| **CI** | GitHub Actions |
 
 ---
 
-## المكدس التقني
+### المكدس التقني
 
 | الطبقة | التقنيات |
 |--------|----------|
-| Backend | Python 3.11+، FastAPI، SQLAlchemy (async)، Pydantic، Uvicorn |
-| DB | PostgreSQL (إنتاج) / SQLite + aiosqlite (تطوير محلي عبر `run_dev_local.sh`) |
+| Backend | Python 3.11+، FastAPI، SQLAlchemy async، Pydantic، Uvicorn |
+| DB | PostgreSQL / SQLite + aiosqlite |
 | Frontend | React 18، TypeScript، Vite، Tailwind، React Router، TanStack Query، Zustand |
 | DevOps | Docker Compose، Nginx، GitHub Actions |
-| Android | Android SDK / `emulator`، `adb`، AVD |
+| Android | SDK، emulator، adb، AVD |
 
 ---
 
-## التشغيل السريع
-
-### Docker (موصى به للتجربة الكاملة)
+### التشغيل السريع
 
 ```bash
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-الواجهة غالبًا على **http://localhost:8080** والـ API تحت **`/api/...`** (راجع إعدادات Nginx في `docker/`).
-
-### تطوير محلي (SQLite) — سكربت جاهز
-
 ```bash
 ./scripts/run_dev_local.sh
 ```
-
-### تطوير يدوي (مختصر)
 
 ```bash
 cd backend && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && uvicorn main:app --reload --port 8000
 cd frontend && npm install && npm run dev
 ```
-
-تفاصيل SDK والمحاكي: أنظر الأقسام السابقة في المستودع و [`firmware/README.md`](firmware/README.md).
-
-### حزمة توزيع
 
 ```bash
 ./scripts/package_release.sh
@@ -200,137 +500,86 @@ cd frontend && npm install && npm run dev
 
 ---
 
-## واجهات API و WebSocket
+### API و WebSocket
 
-- **REST:** `Authorization: Bearer <token>` بعد `/api/auth/login` — وثائق تفاعلية: `/docs` (Swagger).
-- **WebSocket:** `ws://<host>/ws/{device_id}?token=<jwt>` — اشتراك لقطات، `tap` / `swipe` / `keyevent` / `input_text`.
+- **REST:** `Authorization: Bearer <token>` — `/docs`
+- **WebSocket:** `ws://<host>/ws/{device_id}?token=<jwt>`
 
-جدول مختصر لنقاط أساسية موجود أيضًا في الأرشيف السابق للمشروع؛ للتفصيل الكامل راجع [`docs/REFERENCE_SPEC.md`](docs/REFERENCE_SPEC.md).
-
----
-
-## حزم SAMFW والبصمة
-
-ضع أرشيفات ZIP (مثل حزم SAMFW) تحت [`firmware/`](firmware/) واتبع [`firmware/README.md`](firmware/README.md).  
-**لا تُرفع** ملفات ZIP الضخمة إلى Git افتراضيًا (مستبعدة في `.gitignore`).
+التفاصيل: [`docs/REFERENCE_SPEC.md`](docs/REFERENCE_SPEC.md).
 
 ---
 
-## النسخة المطوّرة V2 Pro — 1,000 USD
+### SAMFW والبصمة
 
-**الإصدار الثاني (V2 Pro)** موجّه للفرق والشركات التي تحتاج **أداءً أعلى، تشغيلًا أوسع، ودعمًا تجاريًا**. السعر المرجعي للحزمة المطوّرة: **1,000 USD** (للمناقشة والترخيص والنطاق — اتصل بالمسؤول أدناه).
+ضع الأرشيفات تحت [`firmware/`](firmware/) — [`firmware/README.md`](firmware/README.md). الملفات الضخمة مستبعدة من Git.
 
-### مميزات V2 (مقترحة قوية)
+---
+
+### V2 Pro — 1,000 USD
+
+**V2 Pro** للفرق التي تحتاج أداءً أعلى ودعمًا تجاريًا. **1,000 USD** مرجعي (النطاق والترخيص بالاتفاق).
 
 | الميزة | الفائدة |
 |--------|---------|
-| **مسار فيديو منخفض الزمن** | تكامل **gRPC / WebRTC** (أسلوب scrcpy/EmulatorController) للمحاكي المحلي — بث أقرب للّحظي مقارنة بـ ADB screencap فقط |
-| **إدخال لمسي متقدم** | تيار لمس أقرب للطبيعي (ضغط، متعدد اللمس حيث ينطبق) بدل اعتماد `input swipe` فقط |
-| **تعدد المستأجرين (Multi-tenant)** | عزل بيانات، حصص، وفوترة حسب الاستخدام |
-| **RBAC وصلاحيات دقيقة** | أدوار مخصصة، سياسات وصول للأجهزة والمستودعات |
-| **تسجيل وإعادة تشغيل الجلسات** | Session replay للاختبار، التدقيق، والتدريب |
-| **مزرعة متعددة العقد** | جدولة عبر أكثر من خادم، طوابير ذكية، مراقبة صحة العقد |
-| **مراقبة ومقاييس** | لوحة Grafana/Prometheus — FPS، زمن الإطار، زمن ADB، استخدام CPU/RAM لكل جهاز |
-| **Webhooks + أتمتة** | أحداث الجهاز (تشغيل/إيقاف/خطأ) إلى CI/CD أو Slack/Discord |
-| **حزم بصمات احترافية** | تحديثات دورية لقوالب بصمات متوافقة مع أسواق/شرائح محددة |
-| **تشفير وأسرار** | تكامل Secret manager، تشفير حقول حساسة في القاعدة، سياسات تدوير مفاتيح |
-| **White-label** | شعار، ألوان، ونطاق مخصص للواجهة |
-| **دعم مميز وSLA** | قناة دعم أولوية، اتفاقيات وقت استجابة للإنتاج |
+| فيديو منخفض الزمن | gRPC / WebRTC |
+| لمس متقدم | ضغط، متعدد اللمس |
+| Multi-tenant | عزل وحصص |
+| RBAC | صلاحيات دقيقة |
+| Session replay | تسجيل وإعادة تشغيل |
+| مزرعة متعددة العقد | جدولة وموازنة |
+| مراقبة | Grafana/Prometheus |
+| Webhooks | أتمتة |
+| حزم بصمات احترافية | تحديثات دورية |
+| تشفير وأسرار | Secret manager |
+| White-label | علامة مخصصة |
+| دعم وSLA | أولوية إنتاج |
 
-> V2 ليس فرعًا مفتوح المصدر تلقائيًا في هذا المستودع؛ التفاصيل التجارية عبر قنوات الاتصال في الأسفل.
-
----
-
-## GitHub Topics (وسوم مقترحة)
-
-انسخها إلى حقل **Topics** في إعدادات المستودع:
-
-```
-android
-android-emulator
-avd
-adb
-fastapi
-react
-typescript
-websocket
-docker
-docker-compose
-postgresql
-sqlite
-fingerprint
-device-farm
-remote-control
-apk
-samfw
-devops
-openapi
-jwt
-```
+> V2 تجاري؛ التفاصيل عبر قنوات الاتصال.
 
 ---
 
-## ماذا يفعل الـ CI؟
+### وسوم GitHub
 
-سير العمل [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
-
-1. Backend: `requirements.txt`، `compileall`، تحميل تطبيق FastAPI.
-2. Frontend: `npm ci` / `npm install` + `npm run build`.
-3. التحقق من صحة ملفات Docker Compose.
+انسخ نفس قائمة **Suggested GitHub Topics** من الجزء الإنجليزي أعلاه.
 
 ---
 
-## الصيانة والشركة والاتصال
+### الـ CI
+
+نفس سير العمل [`.github/workflows/ci.yml`](.github/workflows/ci.yml) الموضح في القسم الإنجليزي.
+
+---
+
+### الصيانة والاتصال
 
 | | |
 |--|--|
-| **Developer** | Mostafa El-Bagory |
-| **Company** | Storage TE |
-| **WhatsApp** | +20 100 199 5914 |
+| **المطوّر** | Mostafa El-Bagory |
+| **الشركة** | Storage TE |
+| **واتساب** | +20 100 199 5914 |
 
 ---
 
-## دعم المشروع (اختياري)
+### دعم المشروع
 
-إذا كان هذا التوثيق (أو الأدوات الخاصة المرتبطة به) مفيدًا لك، فالدعم **الاختياري** يساعد على الصيانة والتطوير. اختر الطريقة الأنسب لك.
+نفس جدول **Support this project** في القسم الإنجليزي (PayPal، Binance، عنوان BSC، تحذيرات الشبكة).  
+**صور QR للإيداع:**
 
-| Channel | How to support |
-|---------|----------------|
-| **PayPal** | [paypal.me/sofaapi](https://paypal.me/sofaapi) |
-| **Binance Pay / UID** | **1138751298** — أرسل من تطبيق Binance (Pay / تحويل داخلي عند توفره). |
-| **Binance — إيداع (ويب)** | سجّل الدخول، اختر الأصل، ثم شبكة **BSC (BEP20)** للإيداع. |
-| **عنوان BSC (للنسخ)** | `0x94c5005229784d9b7df4e7a7a0c3b25a08fd57bc` |
-| **الشبكة** | استخدم **BSC (BEP-20) فقط**. العنوان مناسب لـ **USDT (BEP-20)** و**BTC على BSC** (Binance-Peg / «BTC» على BSC داخل التطبيق كما تظهر شاشات الإيداع). **لا ترسل** Bitcoin أصلي على سلسلة BTC، ولا ERC-20، ولا NFTs إلى هذا العنوان. |
+| USDT · BSC | BTC · BSC |
+|------------|-----------|
+| ![USDT BSC QR](assets/usdt-bsc-qr.jpeg) | ![BTC BSC QR](assets/btc-bsc-qr.jpeg) |
 
-### رموز QR للإيداع (مسح من Binance أو أي محفظة BSC)
-
-ضع ملفات الصور تحت [`assets/`](assets/) كما في [`assets/README.md`](assets/README.md):
-
-| الأصل | الملف المقترح |
-|--------|----------------|
-| USDT · BSC | `assets/usdt-bsc-qr.png` |
-| BTC · BSC | `assets/btc-bsc-qr.png` |
+نفس تحذيرات الشبكة والعنوان أعلاه. **ملاحظة:** إحدى الصورتين لإيداع **USDT** على BSC والثانية لـ **BTC على BSC** (Binance-Peg)، وليست تحويل بيتكوين على سلسلة Bitcoin الأصلية. التفاصيل: [`assets/README.md`](assets/README.md).
 
 ---
 
-## الترخيص
+### الترخيص
 
-الكود المرخّص صراحةً تحت [MIT License](LICENSE) ما لم يُذكر خلاف ذلك لملفات أو حزم طرف ثالث.
+[MIT License](LICENSE).
 
 ---
 
-## رفع المستودع إلى GitHub (عام)
-
-إذا لم يكن لديك Git بعد في المجلد:
-
-```bash
-cd /path/to/emulator-android
-git init
-git add .
-git commit -m "chore: initial public release — docs, MIT license, assets"
-```
-
-على GitHub: **New repository** → **Public** → بدون README إن كان محليًا جاهزًا.
+### الرفع إلى GitHub
 
 ```bash
 git remote add origin https://github.com/YOUR_USER/YOUR_REPO.git
@@ -338,4 +587,4 @@ git branch -M main
 git push -u origin main
 ```
 
-ثم استبدل `YOUR_GITHUB_USER` و `YOUR_REPO` في شارة الـ CI أعلى هذا الملف.
+استبدل شارة CI أعلاه باسم المستخدم والمستودع.

@@ -1,14 +1,14 @@
 # Payment QR assets (BSC)
 
-Place deposit QR images here for documentation linking. **Only** these filenames are tracked by Git (see root `.gitignore`):
+Tracked filenames (see root `.gitignore`):
 
-| File (required name) | Use |
-|----------------------|-----|
-| `usdt-bsc-qr.png` | USDT (BEP-20) deposit QR |
-| `btc-bsc-qr.png` | BTC on BSC (Binance-Peg) deposit QR |
+| File | Asset |
+|------|--------|
+| `usdt-bsc-qr.jpeg` | **USDT** deposit on **BSC (BEP-20)** — scan in Binance or any BSC wallet |
+| `btc-bsc-qr.jpeg` | **BTC on BSC** (Binance-Peg) — same network rules as README |
 
-Rename exports (e.g. from WhatsApp) to the names above so `git add` picks them up.
+Both QR screens use the same on-chain address on **BSC only** (see main README). **Do not send** native BTC on-chain, ERC-20, or NFTs to this address.
 
-Scan in the Binance app or any BSC wallet. **Network: BSC (BEP-20) only.**
+Optional: `usdt-bsc-qr.png` / `btc-bsc-qr.png` if you replace with PNG exports.
 
-Do not commit secrets or private keys. These images are public deposit addresses only.
+The original WhatsApp exports (`WhatsApp Image …`) stay **untracked** — use the `usdt-bsc-qr.jpeg` / `btc-bsc-qr.jpeg` names for Git.

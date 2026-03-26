@@ -71,6 +71,8 @@ dist/*.tar.gz
 # أصول الدفع: README + أسماء QR الموثقة فقط
 assets/*
 !assets/README.md
+!assets/usdt-bsc-qr.jpeg
+!assets/btc-bsc-qr.jpeg
 !assets/usdt-bsc-qr.png
 !assets/btc-bsc-qr.png
 
