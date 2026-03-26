@@ -1,0 +1,14 @@
+# يستبدل خدمة backend بصورة فيها Android SDK + emulator (حجم كبير جداً).
+# التشغيل:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.emulator.yml up --build
+#
+# على لينكس لمحاكاة أسرع أضف (حيث يتوفر /dev/kvm):
+#   devices:
+#     - /dev/kvm
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend-emulator
+    environment:
+      AVD_SDK_PATH: /opt/android-sdk

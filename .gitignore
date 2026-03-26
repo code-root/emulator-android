@@ -1,0 +1,72 @@
+# Python
+venv/
+.venv/
+**/.venv/
+**/node_modules/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# SQLite للتطوير المحلي (scripts/run_dev_local.sh)
+backend/data/*.sqlite
+backend/data/*.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Android SDK (محلي عند تشغيل install_android_sdk.sh داخل المشروع)
+.android-sdk-farm/
+
+# Cursor / local AI
+.claude/
+
+# أرشيفات ضخمة في جذر المستودع (ضع SAMFW تحت firmware/ فقط إن رغبت، ولا ترفع ZIP للـ Git)
+/*.zip
+SAMFW*.zip
+
+# نسخ قديمة/مكررة بجانب backend/ — الشفرة المرجعية تحت backend/ + frontend/
+/api/
+/core/
+/adb/
+/qemu/
+/instances/
+/logs/
+/profiles/
+/main.py
+/config.yaml
+/requirements.txt
+
+# مجلد dist في الجذر (حزم محلية)
+/dist/
+
+# حزم ومستخرجات ضخمة تحت firmware/ — يبقى README و .gitkeep فقط
+firmware/*
+!firmware/README.md
+!firmware/.gitkeep
+firmware/*.zip
+firmware/*.ZIP
+
+# Uploads / runtime (محتوى محلي فقط)
+uploads/
+*.log
+
+# حزمة إصدار محلية (يُنشأها scripts/package_release.sh)
+dist/*.tar.gz
+
+# OS
+.DS_Store

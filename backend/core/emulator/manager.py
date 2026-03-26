@@ -1,0 +1,98 @@
+import logging
+from typing import Tuple, Dict, Any, Optional
+
+from core.emulator.avd import AVDBackend
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+
+class EmulatorManager:
+    """High-level emulator lifecycle manager."""
+
+    def __init__(self):
+        self.avd_backend = AVDBackend()
+        # Track running processes: device_id -> asyncio.Process
+        self._processes: Dict[int, Any] = {}
+
+    async def start(self, device) -> Tuple[bool, Dict[str, Any]]:
+        """Start the emulator for the given device record."""
+        backend = settings.EMULATOR_BACKEND
+        if backend == "avd":
+            success, info = await self.avd_backend.start_avd(device)
+        else:
+            logger.error(f"Unknown emulator backend: {backend}")
+            return False, {}
+
+        if success and "process" in info:
+            self._processes[device.id] = info.pop("process")
+
+        if success and info.get("adb_serial"):
+            # Wait for boot in background — this function should not block too long
+            serial = info["adb_serial"]
+            # Wait for ADB to connect
+            try:
+                await self._wait_for_adb(serial, timeout=60)
+                booted = await self.avd_backend.wait_for_boot(serial, timeout=180)
+                if not booted:
+                    logger.warning(f"Device {device.id} may not be fully booted")
+            except Exception as e:
+                logger.warning(f"Boot wait error: {e}")
+
+        return success, info
+
+    async def _wait_for_adb(self, serial: str, timeout: int = 60) -> bool:
+        """Wait until the emulator serial is visible to ADB (local or TCP)."""
+        from core.tools.adb import ADBTool
+        adb = ADBTool()
+        if ":" in serial:
+            try:
+                await adb.connect(serial)
+            except Exception as e:
+                logger.debug(f"ADB optional connect {serial}: {e}")
+        ok = await adb.wait_for_device(serial, timeout=timeout)
+        if ok:
+            logger.info(f"ADB ready for {serial}")
+        return ok
+
+    async def stop(self, device) -> bool:
+        """Stop the emulator for the given device."""
+        # Try graceful ADB shutdown first
+        if device.adb_serial:
+            try:
+                from core.tools.adb import ADBTool
+                adb = ADBTool()
+                await adb.shell(device.adb_serial, "reboot -p")
+            except Exception:
+                pass
+
+        # Kill process
+        proc = self._processes.pop(device.id, None)
+        if proc:
+            try:
+                proc.terminate()
+                import asyncio
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    proc.kill()
+            except Exception as e:
+                logger.warning(f"Error terminating process: {e}")
+
+        return await self.avd_backend.stop_avd(device)
+
+    async def get_status(self, device) -> str:
+        """Get emulator status."""
+        proc = self._processes.get(device.id)
+        if proc is not None:
+            if proc.returncode is None:
+                return "running"
+            else:
+                return "stopped"
+        return await self.avd_backend.get_status(device)
+
+    def is_process_alive(self, device_id: int) -> bool:
+        proc = self._processes.get(device_id)
+        if proc is None:
+            return False
+        return proc.returncode is None

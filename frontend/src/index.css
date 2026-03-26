@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-950 text-gray-100;
+  }
+  * {
+    @apply box-border;
+  }
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-gray-900;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-600 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-500;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-blue-600 hover:bg-blue-700 text-white;
+  }
+  .btn-secondary {
+    @apply btn bg-gray-700 hover:bg-gray-600 text-gray-100;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 hover:bg-red-700 text-white;
+  }
+  .btn-success {
+    @apply btn bg-green-600 hover:bg-green-700 text-white;
+  }
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+  .card {
+    @apply bg-gray-900 border border-gray-800 rounded-xl p-5;
+  }
+  .input {
+    @apply w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500;
+  }
+  .label {
+    @apply block text-xs font-medium text-gray-400 mb-1;
+  }
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  .badge-running {
+    @apply badge bg-green-900/50 text-green-400 border border-green-800;
+  }
+  .badge-stopped {
+    @apply badge bg-gray-800 text-gray-400 border border-gray-700;
+  }
+  .badge-booting {
+    @apply badge bg-yellow-900/50 text-yellow-400 border border-yellow-800;
+  }
+  .badge-error {
+    @apply badge bg-red-900/50 text-red-400 border border-red-800;
+  }
+  .badge-created {
+    @apply badge bg-blue-900/50 text-blue-400 border border-blue-800;
+  }
+  .tab-btn {
+    @apply px-4 py-2 text-sm font-medium rounded-lg transition-colors;
+  }
+  .tab-btn-active {
+    @apply tab-btn bg-blue-600 text-white;
+  }
+  .tab-btn-inactive {
+    @apply tab-btn text-gray-400 hover:text-gray-200 hover:bg-gray-800;
+  }
+}

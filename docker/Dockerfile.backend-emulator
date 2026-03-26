@@ -1,0 +1,40 @@
+# صورة أكبر: Python + OpenJDK + Android SDK + emulator (Linux amd64 أو arm64 حسب منصة البناء)
+# تشغيل المحاكي داخل الحاوية يحتاج عادة: --device /dev/kvm (لينكس فقط) وموارد كافية.
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    ANDROID_HOME=/opt/android-sdk \
+    ANDROID_SDK_ROOT=/opt/android-sdk
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-17-jdk-headless \
+    wget \
+    unzip \
+    ca-certificates \
+    libgl1 \
+    libpulse0 \
+    libnss3 \
+    libx11-6 \
+    libdrm2 \
+    libxkbcommon0 \
+    libglib2.0-0 \
+    libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+COPY scripts/install_android_sdk.sh /tmp/install_android_sdk.sh
+RUN chmod +x /tmp/install_android_sdk.sh && /tmp/install_android_sdk.sh && rm -f /tmp/cmdline-tools-android.zip
+
+WORKDIR /app
+COPY backend/requirements.txt /app/requirements.txt
+RUN pip install --upgrade pip && pip install -r /app/requirements.txt
+
+COPY backend/ /app/
+RUN mkdir -p /app/uploads
+
+ENV PATH="/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/emulator:${PATH}"
+
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

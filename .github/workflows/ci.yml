@@ -1,0 +1,88 @@
+# تحقق تلقائي من الباكند والفرونتند وملف Docker Compose عند كل push / PR
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Python 3.11)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: emulator
+          POSTGRES_PASSWORD: emulator
+          POSTGRES_DB: emulatordb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U emulator -d emulatordb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://emulator:emulator@localhost:5432/emulatordb
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Byte-compile all modules
+        run: python -m compileall -q -x 'venv|\.venv' .
+
+      - name: Import FastAPI application
+        run: python -c "import main; assert getattr(main, 'app', None) is not None"
+
+      - name: Pytest (smoke)
+        run: pytest tests/ -v --tb=short
+
+  frontend:
+    name: Frontend (Node 20)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install and build
+        run: |
+          npm install
+          npm run build
+
+  docker-compose:
+    name: Docker Compose validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose files
+        run: |
+          docker compose -f docker/docker-compose.yml config --quiet
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.emulator.yml config --quiet

@@ -1,0 +1,272 @@
+import axios, { AxiosProgressEvent } from 'axios'
+import type {
+  AuthResponse,
+  Device,
+  DeviceCreateForm,
+  DeviceFingerprint,
+  DevicePresetMeta,
+  DeviceProfileMeta,
+  InstallResult,
+  OperationLog,
+  PackageList,
+  ProxyConfig,
+  ShellResult,
+  User,
+  StoredApk,
+} from '../types'
+
+const RAW_API = import.meta.env.VITE_API_URL
+const BASE_URL =
+  RAW_API !== undefined && RAW_API !== null && String(RAW_API).length > 0
+    ? String(RAW_API).replace(/\/$/, '')
+    : ''
+
+export const apiClient = axios.create({
+  baseURL: BASE_URL,
+  timeout: 30_000,
+})
+
+// Request interceptor — attach JWT token
+apiClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+// Response interceptor — handle 401
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      window.location.href = '/login'
+    }
+    return Promise.reject(error)
+  }
+)
+
+// ─── Auth ──────────────────────────────────────────────────────────────────
+export async function login(username: string, password: string): Promise<AuthResponse> {
+  const res = await apiClient.post<AuthResponse>('/api/auth/login', { username, password })
+  return res.data
+}
+
+export async function register(username: string, email: string, password: string): Promise<User> {
+  const res = await apiClient.post<User>('/api/auth/register', { username, email, password })
+  return res.data
+}
+
+export async function getMe(): Promise<User> {
+  const res = await apiClient.get<User>('/api/auth/me')
+  return res.data
+}
+
+// ─── Devices ───────────────────────────────────────────────────────────────
+export async function getDevices(): Promise<Device[]> {
+  const res = await apiClient.get<Device[]>('/api/devices')
+  return res.data
+}
+
+export async function getDevice(id: number): Promise<Device> {
+  const res = await apiClient.get<Device>(`/api/devices/${id}`)
+  return res.data
+}
+
+export async function createDevice(data: DeviceCreateForm): Promise<Device> {
+  const res = await apiClient.post<Device>('/api/devices', data)
+  return res.data
+}
+
+export async function deleteDevice(id: number): Promise<void> {
+  await apiClient.delete(`/api/devices/${id}`)
+}
+
+export async function startDevice(id: number): Promise<Device> {
+  const res = await apiClient.post<Device>(`/api/devices/${id}/start`)
+  return res.data
+}
+
+export async function stopDevice(id: number): Promise<Device> {
+  const res = await apiClient.post<Device>(`/api/devices/${id}/stop`)
+  return res.data
+}
+
+export async function restartDevice(id: number): Promise<Device> {
+  const res = await apiClient.post<Device>(`/api/devices/${id}/restart`)
+  return res.data
+}
+
+export async function executeShell(id: number, cmd: string): Promise<ShellResult> {
+  const res = await apiClient.post<ShellResult>(`/api/devices/${id}/shell`, { cmd })
+  return res.data
+}
+
+export async function getScreenshot(id: number): Promise<Blob> {
+  const res = await apiClient.get(`/api/devices/${id}/screenshot`, {
+    responseType: 'blob',
+  })
+  return res.data
+}
+
+export async function getDeviceLogs(id: number, limit = 100): Promise<OperationLog[]> {
+  const res = await apiClient.get<OperationLog[]>(`/api/devices/${id}/logs?limit=${limit}`)
+  return res.data
+}
+
+export async function getLogcat(id: number, lines = 100): Promise<{ lines: string[]; total: number }> {
+  const res = await apiClient.get(`/api/devices/${id}/logcat?lines=${lines}`)
+  return res.data
+}
+
+// ─── Fingerprint ──────────────────────────────────────────────────────────
+export async function getFingerprint(id: number): Promise<DeviceFingerprint> {
+  const res = await apiClient.get<DeviceFingerprint>(`/api/devices/${id}/fingerprint`)
+  return res.data
+}
+
+export async function updateFingerprint(
+  id: number,
+  data: Partial<DeviceFingerprint>
+): Promise<DeviceFingerprint> {
+  const res = await apiClient.put<DeviceFingerprint>(`/api/devices/${id}/fingerprint`, data)
+  return res.data
+}
+
+export async function applyFingerprint(id: number): Promise<{
+  success: boolean
+  report: { applied?: string[]; failed?: string[]; warnings?: string[] }
+  samsung_extended_spoof?: boolean
+  note?: string | null
+}> {
+  const res = await apiClient.post(`/api/devices/${id}/fingerprint/apply`)
+  return res.data
+}
+
+export async function randomizeFingerprint(id: number, apply = false): Promise<DeviceFingerprint> {
+  const res = await apiClient.post<DeviceFingerprint>(
+    `/api/devices/${id}/fingerprint/randomize?apply=${apply}`
+  )
+  return res.data
+}
+
+// ─── Apps ─────────────────────────────────────────────────────────────────
+export async function installAPK(
+  id: number,
+  file: File,
+  onProgress?: (progress: number) => void
+): Promise<InstallResult> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await apiClient.post<InstallResult>(`/api/devices/${id}/install`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (evt: AxiosProgressEvent) => {
+      if (onProgress && evt.total) {
+        onProgress(Math.round((evt.loaded * 100) / evt.total))
+      }
+    },
+  })
+  return res.data
+}
+
+export async function getPackages(id: number): Promise<PackageList> {
+  const res = await apiClient.get<PackageList>(`/api/devices/${id}/packages`)
+  return res.data
+}
+
+export async function uninstallPackage(
+  id: number,
+  pkg: string
+): Promise<{ success: boolean; message: string }> {
+  const res = await apiClient.delete(`/api/devices/${id}/packages/${pkg}`)
+  return res.data
+}
+
+// ─── APK Store (مستودع التطبيقات) ───────────────────────────────────────────
+export async function getStoredApks(): Promise<StoredApk[]> {
+  const res = await apiClient.get<StoredApk[]>('/api/store/apks')
+  return res.data
+}
+
+export async function uploadStoredApk(file: File): Promise<StoredApk> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await apiClient.post<StoredApk>('/api/store/apks', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 600_000,
+  })
+  return res.data
+}
+
+export async function deleteStoredApk(id: number): Promise<void> {
+  await apiClient.delete(`/api/store/apks/${id}`)
+}
+
+export async function patchStoredApk(id: number, display_name: string | null): Promise<StoredApk> {
+  const res = await apiClient.patch<StoredApk>(`/api/store/apks/${id}`, { display_name })
+  return res.data
+}
+
+export async function installFromStore(apkId: number, deviceId: number): Promise<InstallResult> {
+  const res = await apiClient.post<InstallResult>(`/api/store/apks/${apkId}/install/${deviceId}`)
+  return res.data
+}
+
+// ─── Proxy ─────────────────────────────────────────────────────────────────
+export async function getProxy(id: number): Promise<ProxyConfig> {
+  const res = await apiClient.get<ProxyConfig>(`/api/devices/${id}/proxy`)
+  return res.data
+}
+
+export async function setProxy(
+  id: number,
+  config: Partial<ProxyConfig>
+): Promise<ProxyConfig> {
+  const res = await apiClient.put<ProxyConfig>(`/api/devices/${id}/proxy`, config)
+  return res.data
+}
+
+export async function startMitmProxy(id: number): Promise<{ success: boolean; port: number; pid: number }> {
+  const res = await apiClient.post(`/api/devices/${id}/proxy/start`)
+  return res.data
+}
+
+export async function stopMitmProxy(id: number): Promise<{ success: boolean }> {
+  const res = await apiClient.post(`/api/devices/${id}/proxy/stop`)
+  return res.data
+}
+
+export async function getProxyTraffic(id: number, limit = 100): Promise<{ entries: string[]; count: number }> {
+  const res = await apiClient.get(`/api/devices/${id}/proxy/traffic?limit=${limit}`)
+  return res.data
+}
+
+export async function getRecentOperationLogs(limit = 50): Promise<OperationLog[]> {
+  const res = await apiClient.get<OperationLog[]>(`/api/operation-logs/recent?limit=${limit}`)
+  return res.data
+}
+
+export async function getDeviceProfiles(): Promise<DeviceProfileMeta[]> {
+  const res = await apiClient.get<DeviceProfileMeta[]>('/api/meta/device-profiles')
+  return res.data
+}
+
+export async function getDevicePresets(): Promise<DevicePresetMeta[]> {
+  const res = await apiClient.get<DevicePresetMeta[]>('/api/meta/device-presets')
+  return res.data
+}
+
+// ─── WebSocket URL helper ──────────────────────────────────────────────────
+export function getWebSocketUrl(deviceId: number): string {
+  const token = encodeURIComponent(localStorage.getItem('token') ?? '')
+  if (typeof window !== 'undefined') {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const host = window.location.host
+    return `${protocol}//${host}/ws/${deviceId}?token=${token}`
+  }
+  const origin = BASE_URL || 'http://localhost:8000'
+  const wsOrigin = origin.replace(/^http/, 'ws')
+  return `${wsOrigin}/ws/${deviceId}?token=${token}`
+}
