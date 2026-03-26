@@ -68,5 +68,11 @@ uploads/
 # حزمة إصدار محلية (يُنشأها scripts/package_release.sh)
 dist/*.tar.gz
 
+# أصول الدفع: README + أسماء QR الموثقة فقط
+assets/*
+!assets/README.md
+!assets/usdt-bsc-qr.png
+!assets/btc-bsc-qr.png
+
 # OS
 .DS_Store
