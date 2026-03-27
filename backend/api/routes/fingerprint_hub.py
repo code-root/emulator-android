@@ -283,7 +283,7 @@ async def randomize_fingerprint_hub(
     model = device_model or fp.device_model or "SM-G996B"
 
     # Preserve existing values that are important
-    build_id = fp.build_id or "AP3A.240905.015.A2"
+    build_id = getattr(fp, 'build_id', None) or "AP3A.240905.015.A2"
     ap_version = fp.ap_version or "G996BXXSJHZC2"
     android_version = fp.android_version or "15"
     manufacturer = fp.manufacturer or "samsung"
