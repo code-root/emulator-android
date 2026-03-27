@@ -18,6 +18,13 @@ _SAMFW_ZIP = re.compile(
     re.IGNORECASE,
 )
 
+# Samsung AP/BL/CSC TAR files: AP_S721BXXS3AYB8_S721BXXS3AYB8_MQB93088282_REV00_...tar.md5
+# Pattern: {COMPONENT}_{AP_VERSION}_{CSC_VERSION}_...tar.md5 or .tar
+_SAMSUNG_TAR = re.compile(
+    r"^(AP|BL|CSC|MODEM)_([A-Z0-9]+)_([A-Z0-9]+)_(.+)\.(tar\.md5|tar)$",
+    re.IGNORECASE,
+)
+
 # مجلد أو اسم حزمة مستخرجة: AP_CSC_SALES — مثال: G996BXXSJHZA6_G996BOXMJHZA6_XSG
 _SAMSUNG_AP_CSC_SALES = re.compile(
     r"^(?P<ap>G996B[A-Z0-9]+)_(?P<csc>G996B[A-Z0-9]+)_(?P<sales>[A-Z]{2,4})$",
@@ -60,6 +67,56 @@ def parse_samfw_filename(filename: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def parse_samsung_tar_filename(filename: str) -> Optional[Dict[str, Any]]:
+    """
+    تحليل ملفات Samsung TAR/TAR.MD5.
+
+    مثال: AP_S721BXXS3AYB8_S721BXXS3AYB8_MQB93088282_REV00_user_low_ship_MULTI_CERT_meta_OS14.tar.md5
+
+    يستخرج:
+    - component: AP (Application Processor)
+    - ap_version: S721BXXS3AYB8
+    - csc_version: S721BXXS3AYB8 (إذا كانت مختلفة)
+    - device_model: يتم استخراجه من AP version (S721B → SM-S721B)
+    """
+    name = PurePath(filename.strip()).name
+    m = _SAMSUNG_TAR.match(name)
+    if not m:
+        return None
+
+    component = m.group(1).upper()  # AP, BL, CSC, MODEM
+    ap_version = m.group(2).upper()
+    csc_version = m.group(3).upper()
+    metadata = m.group(4)  # e.g., MQB93088282_REV00_user_low_ship_...
+    file_ext = m.group(5)  # tar.md5 or tar
+
+    # استخراج الموديل من AP version
+    # مثال: S721BXXS3AYB8 → SM-S721B
+    # نمط: {Letter}{Digits}{Letter} = S721B
+    device_model = None
+    model_match = re.match(r"^([A-Z]+\d+[A-Z])([A-Z0-9]+)", ap_version)
+    if model_match:
+        device_model = f"SM-{model_match.group(1)}"
+
+    result = {
+        "source": "samsung_tar",
+        "filename": name,
+        "ap_version": ap_version,
+        "csc_version": csc_version if csc_version != ap_version else None,
+        "package_variant": f"{component.lower()}_{file_ext}",
+    }
+
+    if device_model:
+        result["device_model"] = device_model
+
+    # محاولة استخراج كود المبيعات من metadata أو CSC
+    # مثال من CSC: S721BXXS3AYB8 قد تحتوي على hints
+    if len(csc_version) >= 5:
+        result["csc_version"] = csc_version
+
+    return result
+
+
 def parse_samsung_bundle_dirname(dirname: str) -> Optional[Dict[str, Any]]:
     """
     يطابق مجلدات Odin/SamFw المسمّاة: {AP}_{CSC_full}_{SALES}
@@ -89,8 +146,17 @@ def parse_samsung_bundle_dirname(dirname: str) -> Optional[Dict[str, Any]]:
 
 
 def resolve_firmware_meta(basename: str) -> Optional[Dict[str, Any]]:
-    """ZIP بصيغة SAMFW أو مجلد/اسم بصيغة AP_CSC_SALES لـ G996B."""
-    return parse_samfw_filename(basename) or parse_samsung_bundle_dirname(basename)
+    """
+    تحليل ملفات firmware بصيغ مختلفة:
+    - SAMFW ZIP: SAMFW.COM_SM-G996B_EGY_*.zip
+    - Samsung TAR: AP_S721BXXS3AYB8_*.tar.md5
+    - Bundle DIR: G996BXXSJHZA6_G996BOXMJHZA6_XSG/
+    """
+    return (
+        parse_samfw_filename(basename)
+        or parse_samsung_tar_filename(basename)
+        or parse_samsung_bundle_dirname(basename)
+    )
 
 
 def _guess_csc_version(device_model: str, sales_code: str, ap_version: str) -> Optional[str]:
