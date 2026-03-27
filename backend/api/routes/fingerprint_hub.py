@@ -282,6 +282,14 @@ async def randomize_fingerprint_hub(
     # Preserve or use device_model
     model = device_model or fp.device_model or "SM-G996B"
 
+    # Preserve existing values that are important
+    build_id = fp.build_id or "AP3A.240905.015.A2"
+    ap_version = fp.ap_version or "G996BXXSJHZC2"
+    android_version = fp.android_version or "15"
+    manufacturer = fp.manufacturer or "samsung"
+    brand = fp.brand or "samsung"
+    device_codename = fp.device_codename or "o1s"
+
     # Generate realistic identifiers
     new_data = {
         "device_model": model,
@@ -289,34 +297,30 @@ async def randomize_fingerprint_hub(
         "android_id": generate_android_id(),
         "mac_address": random_samsung_mac(),
         "serial_number": random_samsung_serial(model),
-        "latitude": location["latitude"],
-        "longitude": location["longitude"],
-        "altitude": location["altitude_m"],
+        "latitude": location.get("latitude", 0.0),
+        "longitude": location.get("longitude", 0.0),
+        "altitude": location.get("altitude", 0.0),
         "timezone": location.get("timezone", "UTC"),
-        "network_type": "LTE",  # default to LTE
+        "network_type": "LTE",
         "ip_address": ip,
         "mcc": carrier.get("mcc"),
         "mnc": carrier.get("mnc"),
+        "manufacturer": manufacturer,
+        "brand": brand,
+        "device_codename": device_codename,
+        "build_fingerprint": build_fingerprint_for_model(
+            model, ap_version, android_version, build_id
+        ),
     }
 
-    # Build fingerprint string if we have build_id, ap_version, android_version
-    if fp.build_id and fp.ap_version and fp.android_version:
-        new_data["build_fingerprint"] = build_fingerprint_for_model(
-            model, fp.ap_version, fp.android_version, fp.build_id
-        )
-
-    # Keep manufacturer/brand/etc. from existing profile if not set
-    if not fp.manufacturer:
-        new_data["manufacturer"] = "samsung"
-    if not fp.brand:
-        new_data["brand"] = "samsung"
-    if not fp.device_codename:
-        new_data["device_codename"] = "o1s"
-
-    # Apply to ORM row
+    # Apply to ORM row safely
     for k, v in new_data.items():
-        if hasattr(fp, k) and v is not None:
-            setattr(fp, k, v)
+        if v is not None:
+            try:
+                setattr(fp, k, v)
+            except (AttributeError, TypeError):
+                # Skip fields that don't exist or can't be set
+                pass
 
     # Handle extended JSON (preserve existing or empty)
     if fp.extended_json:

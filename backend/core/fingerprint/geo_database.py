@@ -393,6 +393,239 @@ COUNTRY_DB: Dict[str, Dict[str, Any]] = {
         "language": "id",
         "country_iso": "id",
     },
+    # ═══════════════════════════════════════════════════════════════════════════
+    # شرق أوسط / Middle East
+    # ═══════════════════════════════════════════════════════════════════════════
+    "IQ": {
+        "name": "Iraq",
+        "cities": [
+            ("Baghdad",   33.3128, 44.3615, 34),
+            ("Basra",     30.5085, 47.8078,  3),
+            ("Mosul",     36.3538, 43.1581, 225),
+            ("Erbil",     36.1921, 43.9889, 929),
+        ],
+        "carriers": [
+            {"name": "Zain IQ",       "mcc": "418", "mnc": "05", "apn": "zain"},
+            {"name": "Asiacell",      "mcc": "418", "mnc": "08", "apn": "asiacell"},
+            {"name": "Ooredoo IQ",    "mcc": "418", "mnc": "40", "apn": "ooredoo"},
+        ],
+        "ip_prefixes": ["37.128.", "94.101.", "185.37.", "185.97."],
+        "timezone": "Asia/Baghdad",
+        "language": "ar",
+        "country_iso": "iq",
+    },
+    "KW": {
+        "name": "Kuwait",
+        "cities": [
+            ("Kuwait City", 29.3759, 47.9774, 10),
+            ("Salmiya",     29.3809, 47.8289,  8),
+        ],
+        "carriers": [
+            {"name": "Zain KW",    "mcc": "419", "mnc": "02", "apn": "zain.net"},
+            {"name": "Ooredoo KW", "mcc": "419", "mnc": "03", "apn": "internet"},
+            {"name": "VIVA",       "mcc": "419", "mnc": "04", "apn": "viva.net"},
+        ],
+        "ip_prefixes": ["37.22.", "82.148.", "94.101.", "195.229."],
+        "timezone": "Asia/Kuwait",
+        "language": "ar",
+        "country_iso": "kw",
+    },
+    "JO": {
+        "name": "Jordan",
+        "cities": [
+            ("Amman",      31.9454, 35.9284, 777),
+            ("Zarqa",      32.0551, 36.0876, 526),
+            ("Irbid",      32.5537, 35.8501, 560),
+        ],
+        "carriers": [
+            {"name": "Zain JO",       "mcc": "416", "mnc": "01", "apn": "internet"},
+            {"name": "Orange JO",     "mcc": "416", "mnc": "02", "apn": "orange"},
+            {"name": "Umniah",        "mcc": "416", "mnc": "10", "apn": "umniah"},
+        ],
+        "ip_prefixes": ["82.102.", "94.201.", "196.1.", "213.6."],
+        "timezone": "Asia/Amman",
+        "language": "ar",
+        "country_iso": "jo",
+    },
+    "LB": {
+        "name": "Lebanon",
+        "cities": [
+            ("Beirut",     33.8886, 35.4955, 45),
+            ("Tripoli",    34.4347, 35.8449, 20),
+            ("Sidon",      33.5644, 35.3756, 10),
+        ],
+        "carriers": [
+            {"name": "Alfa",     "mcc": "415", "mnc": "01", "apn": "alfa"},
+            {"name": "TouchTel", "mcc": "415", "mnc": "03", "apn": "touchtel.net"},
+            {"name": "Ogero",    "mcc": "415", "mnc": "05", "apn": "internet"},
+        ],
+        "ip_prefixes": ["37.131.", "80.84.", "195.154.", "217.115."],
+        "timezone": "Asia/Beirut",
+        "language": "ar",
+        "country_iso": "lb",
+    },
+    "BH": {
+        "name": "Bahrain",
+        "cities": [
+            ("Manama",    26.2235, 50.5861, 10),
+        ],
+        "carriers": [
+            {"name": "Zain BH",    "mcc": "426", "mnc": "01", "apn": "internet"},
+            {"name": "Ooredoo BH", "mcc": "426", "mnc": "02", "apn": "internet"},
+            {"name": "VIVA",       "mcc": "426", "mnc": "04", "apn": "viva"},
+        ],
+        "ip_prefixes": ["82.148.", "94.200.", "185.3."],
+        "timezone": "Asia/Bahrain",
+        "language": "ar",
+        "country_iso": "bh",
+    },
+    "OM": {
+        "name": "Oman",
+        "cities": [
+            ("Muscat",      23.6144, 58.5922, 10),
+            ("Salalah",     17.0151, 54.0924, 26),
+            ("Nizwa",       22.9341, 57.5411, 618),
+        ],
+        "carriers": [
+            {"name": "Oman Mobile", "mcc": "422", "mnc": "02", "apn": "internet"},
+            {"name": "Ooredoo OM",  "mcc": "422", "mnc": "01", "apn": "internet"},
+        ],
+        "ip_prefixes": ["82.102.", "185.194.", "212.27."],
+        "timezone": "Asia/Muscat",
+        "language": "ar",
+        "country_iso": "om",
+    },
+    "QA": {
+        "name": "Qatar",
+        "cities": [
+            ("Doha",       25.2854, 51.5310, 10),
+        ],
+        "carriers": [
+            {"name": "Ooredoo QA",  "mcc": "427", "mnc": "01", "apn": "internet"},
+            {"name": "Vodafone QA", "mcc": "427", "mnc": "02", "apn": "internet"},
+        ],
+        "ip_prefixes": ["82.148.", "185.3.", "195.88."],
+        "timezone": "Asia/Qatar",
+        "language": "ar",
+        "country_iso": "qa",
+    },
+    "PS": {
+        "name": "Palestine",
+        "cities": [
+            ("Gaza",      31.5167, 34.4667, 10),
+            ("Ramallah",  31.9454, 35.1932, 860),
+            ("Bethlehem", 31.9454, 35.1932, 765),
+        ],
+        "carriers": [
+            {"name": "Jawwal",       "mcc": "425", "mnc": "01", "apn": "www"},
+            {"name": "Ooredoo PS",   "mcc": "425", "mnc": "02", "apn": "3gnet"},
+            {"name": "Wataniya",     "mcc": "425", "mnc": "03", "apn": "wataniya"},
+        ],
+        "ip_prefixes": ["89.163.", "185.180.", "195.88."],
+        "timezone": "Asia/Gaza",
+        "language": "ar",
+        "country_iso": "ps",
+    },
+    "SY": {
+        "name": "Syria",
+        "cities": [
+            ("Damascus",   33.5138, 36.2765, 680),
+            ("Aleppo",     36.2021, 37.1671, 380),
+            ("Homs",       34.7302, 36.7232, 300),
+        ],
+        "carriers": [
+            {"name": "Syriatel",  "mcc": "963", "mnc": "01", "apn": "internet"},
+            {"name": "MTN SY",    "mcc": "963", "mnc": "20", "apn": "internet"},
+        ],
+        "ip_prefixes": ["37.67.", "82.103.", "195.154."],
+        "timezone": "Asia/Damascus",
+        "language": "ar",
+        "country_iso": "sy",
+    },
+    "YE": {
+        "name": "Yemen",
+        "cities": [
+            ("Sana'a",     15.3694, 48.2219, 2270),
+            ("Aden",       12.7751, 45.3569, 50),
+            ("Taiz",       13.5769, 44.0210, 1404),
+        ],
+        "carriers": [
+            {"name": "Sabafon",  "mcc": "421", "mnc": "01", "apn": "internet"},
+            {"name": "MTN YE",   "mcc": "421", "mnc": "03", "apn": "mtn"},
+            {"name": "Yemen Mobile", "mcc": "421", "mnc": "02", "apn": "internet"},
+        ],
+        "ip_prefixes": ["81.201.", "156.96.", "196.3."],
+        "timezone": "Asia/Aden",
+        "language": "ar",
+        "country_iso": "ye",
+    },
+    "LY": {
+        "name": "Libya",
+        "cities": [
+            ("Tripoli",    32.8872,  13.1913, 18),
+            ("Benghazi",   32.1165,  20.0582, 10),
+            ("Misrata",    32.3741,  15.0930, 10),
+        ],
+        "carriers": [
+            {"name": "Libyana",  "mcc": "606", "mnc": "01", "apn": "internet"},
+            {"name": "Almadar",  "mcc": "606", "mnc": "06", "apn": "internet"},
+        ],
+        "ip_prefixes": ["41.230.", "196.1.", "212.94."],
+        "timezone": "Africa/Tripoli",
+        "language": "ar",
+        "country_iso": "ly",
+    },
+    "DZ": {
+        "name": "Algeria",
+        "cities": [
+            ("Algiers",    36.7538, 3.0588, 73),
+            ("Oran",       35.6969, -0.6308, 90),
+            ("Constantine", 36.3575, 6.6145, 644),
+        ],
+        "carriers": [
+            {"name": "Ooredoo DZ", "mcc": "603", "mnc": "01", "apn": "internet"},
+            {"name": "Mobilis",    "mcc": "603", "mnc": "02", "apn": "mobilis"},
+            {"name": "Zain DZ",    "mcc": "603", "mnc": "03", "apn": "internet"},
+        ],
+        "ip_prefixes": ["41.107.", "105.186.", "196.200.", "41.228."],
+        "timezone": "Africa/Algiers",
+        "language": "ar",
+        "country_iso": "dz",
+    },
+    "TN": {
+        "name": "Tunisia",
+        "cities": [
+            ("Tunis",      36.8065, 10.1686, 70),
+            ("Sfax",       34.7406, 10.7603, 15),
+            ("Sousse",     35.8256, 10.6369, 15),
+        ],
+        "carriers": [
+            {"name": "Tunisie Telecom", "mcc": "605", "mnc": "01", "apn": "internet"},
+            {"name": "Ooredoo TN",      "mcc": "605", "mnc": "03", "apn": "internet"},
+            {"name": "Orange TN",       "mcc": "605", "mnc": "02", "apn": "orange"},
+        ],
+        "ip_prefixes": ["41.226.", "196.200.", "212.7."],
+        "timezone": "Africa/Tunis",
+        "language": "ar",
+        "country_iso": "tn",
+    },
+    "SD": {
+        "name": "Sudan",
+        "cities": [
+            ("Khartoum",   15.5007, 32.5599, 380),
+            ("Omdurman",   15.5500, 32.4833, 380),
+            ("Port Sudan", 19.6173, 37.2169, 10),
+        ],
+        "carriers": [
+            {"name": "Zain SD",      "mcc": "639", "mnc": "01", "apn": "internet"},
+            {"name": "Sudani",       "mcc": "639", "mnc": "02", "apn": "internet"},
+            {"name": "MTarife",      "mcc": "639", "mnc": "03", "apn": "mtarife"},
+        ],
+        "ip_prefixes": ["41.77.", "196.1.", "196.3."],
+        "timezone": "Africa/Khartoum",
+        "language": "ar",
+        "country_iso": "sd",
+    },
 }
 
 

@@ -38,6 +38,8 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
   const [applyDetail, setApplyDetail] = useState<string | null>(null)
   const [selectedCountry, setSelectedCountry] = useState<string>('')
+  const [countrySearch, setCountrySearch] = useState<string>('')
+  const [showCountryDropdown, setShowCountryDropdown] = useState(false)
 
   const { data: fp, isLoading } = useQuery({
     queryKey: ['fingerprint', deviceId],
@@ -150,25 +152,66 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
   const countryOptions = Object.entries(countriesData?.countries ?? {})
     .sort(([, a], [, b]) => a.name.localeCompare(b.name))
 
+  // Filter countries by search term
+  const filteredCountries = countryOptions.filter(([code, country]) =>
+    country.name.toLowerCase().includes(countrySearch.toLowerCase()) ||
+    code.toLowerCase().includes(countrySearch.toLowerCase())
+  )
+
+  const selectedCountryName = countryOptions.find(([code]) => code === selectedCountry)?.[1]?.name || 'Global'
+
   return (
     <div className="card space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="font-semibold text-gray-200">Device fingerprint</h3>
-        <div className="flex flex-wrap gap-2 items-center">
+        <div className="flex flex-wrap gap-2 items-center relative">
           <div className="flex items-center gap-2">
             <label className="text-sm text-gray-400">Country:</label>
-            <select
-              value={selectedCountry}
-              onChange={(e) => setSelectedCountry(e.target.value)}
-              className="input btn-sm text-sm px-3 py-1.5 w-40"
-            >
-              <option value="">Global (random)</option>
-              {countryOptions.map(([code, country]) => (
-                <option key={code} value={code}>
-                  {country.name}
-                </option>
-              ))}
-            </select>
+            <div className="relative w-48">
+              <input
+                type="text"
+                placeholder="Search countries..."
+                value={countrySearch || (selectedCountry ? selectedCountryName : '')}
+                onChange={(e) => {
+                  setCountrySearch(e.target.value)
+                  setShowCountryDropdown(true)
+                }}
+                onFocus={() => setShowCountryDropdown(true)}
+                className="input text-sm px-3 py-1.5 w-full"
+              />
+              {showCountryDropdown && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded shadow-lg z-10 max-h-56 overflow-y-auto">
+                  <div
+                    className="px-3 py-2 hover:bg-gray-700 cursor-pointer text-sm text-gray-300"
+                    onClick={() => {
+                      setSelectedCountry('')
+                      setCountrySearch('')
+                      setShowCountryDropdown(false)
+                    }}
+                  >
+                    🌍 Global (random)
+                  </div>
+                  {filteredCountries.map(([code, country]) => (
+                    <div
+                      key={code}
+                      className={clsx(
+                        'px-3 py-2 cursor-pointer text-sm',
+                        selectedCountry === code
+                          ? 'bg-blue-900 text-blue-200'
+                          : 'text-gray-300 hover:bg-gray-700'
+                      )}
+                      onClick={() => {
+                        setSelectedCountry(code)
+                        setCountrySearch('')
+                        setShowCountryDropdown(false)
+                      }}
+                    >
+                      {country.name} ({code})
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
           <button
             type="button"
