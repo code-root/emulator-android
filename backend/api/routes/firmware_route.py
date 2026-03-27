@@ -154,7 +154,7 @@ async def get_firmware_sources(
 
 
 @router.post("/upload")
-def upload_firmware_file(
+async def upload_firmware_file(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
@@ -195,13 +195,14 @@ def upload_firmware_file(
     meta = resolve_firmware_meta(safe_name) or {}
 
     # Upsert FirmwareEntry by filename
-    existing = db.query(FirmwareEntry).filter(FirmwareEntry.filename == safe_name).first()
+    result = await db.execute(select(FirmwareEntry).where(FirmwareEntry.filename == safe_name))
+    existing = result.scalar_one_or_none()
 
     if existing:
         existing.size_bytes = len(data)
         existing.local_path = str(dest_path)
-        db.commit()
-        db.refresh(existing)
+        await db.commit()
+        await db.refresh(existing)
         return FirmwareEntryResponse.from_orm(existing)
 
     # Create new entry
@@ -217,8 +218,8 @@ def upload_firmware_file(
         local_path=str(dest_path),
     )
     db.add(entry)
-    db.commit()
-    db.refresh(entry)
+    await db.commit()
+    await db.refresh(entry)
 
     return FirmwareEntryResponse.from_orm(entry)
 
@@ -319,7 +320,7 @@ async def list_available_packages(
 
 
 @router.get("/entries")
-def list_firmware_entries(
+async def list_firmware_entries(
     model: Optional[str] = None,
     csc: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -334,25 +335,22 @@ def list_firmware_entries(
 
     Returns all matching entries sorted by created_at descending.
     """
-    try:
-        query = db.query(FirmwareEntry)
+    stmt = select(FirmwareEntry)
 
-        if model:
-            query = query.filter(FirmwareEntry.device_model == model)
-        if csc:
-            query = query.filter(FirmwareEntry.sales_code == csc)
+    if model:
+        stmt = stmt.where(FirmwareEntry.device_model == model)
+    if csc:
+        stmt = stmt.where(FirmwareEntry.sales_code == csc)
 
-        entries = query.order_by(FirmwareEntry.created_at.desc()).all()
-        return [FirmwareEntryResponse.from_orm(e) for e in entries]
-    except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"list_firmware_entries error: {type(e).__name__}: {str(e)}", exc_info=True)
-        raise HTTPException(500, f"Failed to list firmware entries: {str(e)}")
+    stmt = stmt.order_by(FirmwareEntry.created_at.desc())
+
+    result = await db.execute(stmt)
+    entries = result.scalars().all()
+    return [FirmwareEntryResponse.from_orm(e) for e in entries]
 
 
 @router.post("/entries")
-def create_firmware_entry(
+async def create_firmware_entry(
     req: FirmwareEntryCreate,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
@@ -387,13 +385,13 @@ def create_firmware_entry(
         notes=req.notes,
     )
     db.add(entry)
-    db.commit()
-    db.refresh(entry)
+    await db.commit()
+    await db.refresh(entry)
     return FirmwareEntryResponse.from_orm(entry)
 
 
 @router.put("/entries/{entry_id}")
-def update_firmware_entry(
+async def update_firmware_entry(
     entry_id: int,
     req: FirmwareEntryUpdate,
     db: Session = Depends(get_db),
@@ -407,7 +405,8 @@ def update_firmware_entry(
 
     Request body contains only fields to update (others left unchanged).
     """
-    entry = db.query(FirmwareEntry).filter(FirmwareEntry.id == entry_id).first()
+    result = await db.execute(select(FirmwareEntry).where(FirmwareEntry.id == entry_id))
+    entry = result.scalar_one_or_none()
     if not entry:
         raise HTTPException(404, f"Firmware entry {entry_id} not found")
 
@@ -415,13 +414,13 @@ def update_firmware_entry(
     for key, value in update_data.items():
         setattr(entry, key, value)
 
-    db.commit()
-    db.refresh(entry)
+    await db.commit()
+    await db.refresh(entry)
     return FirmwareEntryResponse.from_orm(entry)
 
 
 @router.delete("/entries/{entry_id}")
-def delete_firmware_entry(
+async def delete_firmware_entry(
     entry_id: int,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
@@ -434,17 +433,18 @@ def delete_firmware_entry(
 
     Note: Does NOT delete the actual firmware file (local_path).
     """
-    entry = db.query(FirmwareEntry).filter(FirmwareEntry.id == entry_id).first()
+    result = await db.execute(select(FirmwareEntry).where(FirmwareEntry.id == entry_id))
+    entry = result.scalar_one_or_none()
     if not entry:
         raise HTTPException(404, f"Firmware entry {entry_id} not found")
 
-    db.delete(entry)
-    db.commit()
+    await db.delete(entry)
+    await db.commit()
     return {"success": True, "entry_id": entry_id}
 
 
 @router.post("/sync")
-def sync_firmware_entries(
+async def sync_firmware_entries(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -465,17 +465,21 @@ def sync_firmware_entries(
         # Check if entry already exists by filename or by model/csc/ap combo
         existing = None
         if pkg.get("filename"):
-            existing = db.query(FirmwareEntry).filter(
-                FirmwareEntry.filename == pkg["filename"]
-            ).first()
+            result = await db.execute(
+                select(FirmwareEntry).where(FirmwareEntry.filename == pkg["filename"])
+            )
+            existing = result.scalar_one_or_none()
 
         if not existing:
             # Try to match by model + csc + ap_version
-            existing = db.query(FirmwareEntry).filter(
-                FirmwareEntry.device_model == pkg.get("device_model"),
-                FirmwareEntry.sales_code == pkg.get("sales_code"),
-                FirmwareEntry.ap_version == pkg.get("ap_version"),
-            ).first()
+            result = await db.execute(
+                select(FirmwareEntry).where(
+                    FirmwareEntry.device_model == pkg.get("device_model"),
+                    FirmwareEntry.sales_code == pkg.get("sales_code"),
+                    FirmwareEntry.ap_version == pkg.get("ap_version"),
+                )
+            )
+            existing = result.scalar_one_or_none()
 
         if not existing:
             # Create new entry
@@ -491,5 +495,5 @@ def sync_firmware_entries(
             db.add(entry)
             imported += 1
 
-    db.commit()
+    await db.commit()
     return {"success": True, "imported": imported}
