@@ -661,6 +661,46 @@ SAMSUNG_TAC_DB: Dict[str, List[str]] = {
     "SM-N986B": [
         "35093511", "35093512", "35093513",
     ],
+    # S24 family
+    "SM-S921B": [
+        "35849814", "35849815", "35849816", "35849817",
+    ],
+    "SM-S926B": [
+        "35849818", "35849819", "35849820", "35849821",
+    ],
+    "SM-S928B": [
+        "35849822", "35849823", "35849824", "35849825",
+    ],
+    # S23/S21 FE series
+    "SM-S711B": [
+        "35574015", "35574016", "35574017",
+    ],
+    "SM-S741B": [
+        "35909611", "35909612", "35909613",
+    ],
+    "SM-G990B": [
+        "35272025", "35272026", "35272027",
+    ],
+    # A-series (Galaxy A)
+    "SM-A556B": [
+        "35649411", "35649412", "35649413", "35649414",
+    ],
+    "SM-A546B": [
+        "35524711", "35524712", "35524713", "35524714",
+    ],
+    "SM-A346B": [
+        "35471011", "35471012", "35471013",
+    ],
+    "SM-A256B": [
+        "35464411", "35464412", "35464413",
+    ],
+    # S22 series (was missing TAC codes)
+    "SM-S901B": [
+        "35585011", "35585012", "35585013",
+    ],
+    "SM-S908B": [
+        "35585020", "35585021", "35585022",
+    ],
     # Generic Samsung fallback
     "_default": [
         "35272111", "35272112", "35272113", "35272114",
@@ -841,6 +881,22 @@ def build_fingerprint_for_model(
         "SM-A536B": ("samsung", "a53xeea",  "a53x"),
         "SM-A525F": ("samsung", "a52xeea",  "a52x"),
         "SM-N986B": ("samsung", "c2q",       "c2q"),
+        # S24 family
+        "SM-S921B": ("samsung", "e1sxeea",  "e1s"),
+        "SM-S926B": ("samsung", "e2sxeea",  "e2s"),
+        "SM-S928B": ("samsung", "e3sxeea",  "e3s"),
+        # S23/S21 FE
+        "SM-S711B": ("samsung", "r11sxeea", "r11s"),
+        "SM-S741B": ("samsung", "r12sxeea", "r12s"),
+        "SM-G990B": ("samsung", "r9sxeea",  "r9s"),
+        # A-series
+        "SM-A556B": ("samsung", "a55xeea",  "a55x"),
+        "SM-A546B": ("samsung", "a54xeea",  "a54x"),
+        "SM-A346B": ("samsung", "a34xeea",  "a34x"),
+        "SM-A256B": ("samsung", "a25xeea",  "a25x"),
+        # S22 (fix wrong fallback)
+        "SM-S901B": ("samsung", "r0qxeea",  "r0q"),
+        "SM-S908B": ("samsung", "b0qxeea",  "b0q"),
     }
     brand, product, device = model_segments.get(
         device_model.upper(), ("samsung", "o1sxeea", "o1s")
