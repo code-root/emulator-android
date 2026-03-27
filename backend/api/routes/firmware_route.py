@@ -109,15 +109,15 @@ class FirmwareEntryResponse(BaseModel):
     source: str
     device_model: str
     sales_code: str
-    ap_version: Optional[str]
-    csc_version: Optional[str]
-    package_variant: Optional[str]
-    country: Optional[str]
-    language: Optional[str]
-    filename: Optional[str]
+    ap_version: Optional[str] = None
+    csc_version: Optional[str] = None
+    package_variant: Optional[str] = None
+    country: Optional[str] = None
+    language: Optional[str] = None
+    filename: Optional[str] = None
     size_bytes: int
-    local_path: Optional[str]
-    notes: Optional[str]
+    local_path: Optional[str] = None
+    notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -202,7 +202,7 @@ def upload_firmware_file(
         existing.local_path = str(dest_path)
         db.commit()
         db.refresh(existing)
-        return FirmwareEntryResponse.from_orm(existing)
+        return FirmwareEntryResponse.model_validate(existing)
 
     # Create new entry
     entry = FirmwareEntry(
@@ -220,7 +220,7 @@ def upload_firmware_file(
     db.commit()
     db.refresh(entry)
 
-    return FirmwareEntryResponse.from_orm(entry)
+    return FirmwareEntryResponse.model_validate(entry)
 
 
 @router.post("/download")
@@ -342,7 +342,7 @@ def list_firmware_entries(
         query = query.filter(FirmwareEntry.sales_code == csc)
 
     entries = query.order_by(FirmwareEntry.created_at.desc()).all()
-    return [FirmwareEntryResponse.from_orm(e) for e in entries]
+    return [FirmwareEntryResponse.model_validate(e) for e in entries]
 
 
 @router.post("/entries")
@@ -383,7 +383,7 @@ def create_firmware_entry(
     db.add(entry)
     db.commit()
     db.refresh(entry)
-    return FirmwareEntryResponse.from_orm(entry)
+    return FirmwareEntryResponse.model_validate(entry)
 
 
 @router.put("/entries/{entry_id}")
@@ -411,7 +411,7 @@ def update_firmware_entry(
 
     db.commit()
     db.refresh(entry)
-    return FirmwareEntryResponse.from_orm(entry)
+    return FirmwareEntryResponse.model_validate(entry)
 
 
 @router.delete("/entries/{entry_id}")
