@@ -26,6 +26,7 @@ from api.routes import (
     device_controls,
     network_inspector,
     frida,
+    firmware_route,
 )
 
 logging.basicConfig(
@@ -116,6 +117,7 @@ app.include_router(apk_store.router, prefix="/api")
 app.include_router(device_controls.router, prefix="/api")
 app.include_router(network_inspector.router, prefix="/api")
 app.include_router(frida.router, prefix="/api")
+app.include_router(firmware_route.router, prefix="/api")
 app.include_router(ws.router)      # no /api prefix — JPEG streaming
 app.include_router(ws_h264.router) # no /api prefix — H.264 binary streaming
 

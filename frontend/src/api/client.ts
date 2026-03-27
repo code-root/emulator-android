@@ -396,6 +396,59 @@ export async function pushFridaScript(id: number): Promise<{ success: boolean; r
   return res.data
 }
 
+// ─── Firmware Download Management ──────────────────────────────────────────
+
+export interface FirmwareJob {
+  job_id: string
+  model: string
+  csc: string
+  ap_version: string | null
+  status: 'pending' | 'downloading' | 'verifying' | 'done' | 'failed' | 'cancelled' | 'needs_url'
+  progress_pct: number
+  downloaded_bytes: number
+  total_bytes: number | null
+  dest_path: string | null
+  error: string | null
+  md5_hash: string | null
+  sha256_hash: string | null
+  requires_url: boolean
+}
+
+export async function startFirmwareDownload(
+  model: string,
+  csc: string,
+  url?: string
+): Promise<FirmwareJob> {
+  const res = await apiClient.post<FirmwareJob>('/api/firmware/download', {
+    model,
+    csc,
+    url,
+  })
+  return res.data
+}
+
+export async function listFirmwareJobs(limit?: number): Promise<FirmwareJob[]> {
+  const res = await apiClient.get<FirmwareJob[]>('/api/firmware/jobs', {
+    params: limit ? { limit } : undefined,
+  })
+  return res.data
+}
+
+export async function getFirmwareJob(jobId: string): Promise<FirmwareJob> {
+  const res = await apiClient.get<FirmwareJob>(`/api/firmware/jobs/${jobId}`)
+  return res.data
+}
+
+export async function cancelFirmwareJob(jobId: string): Promise<{ success: boolean; job_id: string }> {
+  const res = await apiClient.delete(`/api/firmware/jobs/${jobId}`)
+  return res.data
+}
+
+export async function listFirmwarePackages(): Promise<FirmwarePackageMeta[]> {
+  const res = await apiClient.get<FirmwarePackageMeta[]>('/api/firmware/packages')
+  return res.data
+}
+
 // ─── WebSocket URL helper ──────────────────────────────────────────────────
 /**
  * WebSocket origin:
