@@ -202,7 +202,7 @@ def upload_firmware_file(
         existing.local_path = str(dest_path)
         db.commit()
         db.refresh(existing)
-        return FirmwareEntryResponse.model_validate(existing)
+        return FirmwareEntryResponse.from_orm(existing)
 
     # Create new entry
     entry = FirmwareEntry(
@@ -220,7 +220,7 @@ def upload_firmware_file(
     db.commit()
     db.refresh(entry)
 
-    return FirmwareEntryResponse.model_validate(entry)
+    return FirmwareEntryResponse.from_orm(entry)
 
 
 @router.post("/download")
@@ -334,15 +334,21 @@ def list_firmware_entries(
 
     Returns all matching entries sorted by created_at descending.
     """
-    query = db.query(FirmwareEntry)
+    try:
+        query = db.query(FirmwareEntry)
 
-    if model:
-        query = query.filter(FirmwareEntry.device_model == model)
-    if csc:
-        query = query.filter(FirmwareEntry.sales_code == csc)
+        if model:
+            query = query.filter(FirmwareEntry.device_model == model)
+        if csc:
+            query = query.filter(FirmwareEntry.sales_code == csc)
 
-    entries = query.order_by(FirmwareEntry.created_at.desc()).all()
-    return [FirmwareEntryResponse.model_validate(e) for e in entries]
+        entries = query.order_by(FirmwareEntry.created_at.desc()).all()
+        return [FirmwareEntryResponse.from_orm(e) for e in entries]
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"list_firmware_entries error: {type(e).__name__}: {str(e)}", exc_info=True)
+        raise HTTPException(500, f"Failed to list firmware entries: {str(e)}")
 
 
 @router.post("/entries")
@@ -383,7 +389,7 @@ def create_firmware_entry(
     db.add(entry)
     db.commit()
     db.refresh(entry)
-    return FirmwareEntryResponse.model_validate(entry)
+    return FirmwareEntryResponse.from_orm(entry)
 
 
 @router.put("/entries/{entry_id}")
@@ -411,7 +417,7 @@ def update_firmware_entry(
 
     db.commit()
     db.refresh(entry)
-    return FirmwareEntryResponse.model_validate(entry)
+    return FirmwareEntryResponse.from_orm(entry)
 
 
 @router.delete("/entries/{entry_id}")
