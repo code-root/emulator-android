@@ -6,6 +6,7 @@ import Devices from './pages/Devices'
 import DeviceDetail from './pages/DeviceDetail'
 import Settings from './pages/Settings'
 import AppStore from './pages/AppStore'
+import FirmwareTools from './pages/FirmwareTools'
 import Sidebar from './components/Sidebar'
 import type { ReactNode } from 'react'
 
@@ -169,6 +170,16 @@ export default function App() {
             <ProtectedRoute>
               <AppLayout>
                 <AppStore />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/firmware"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <FirmwareTools />
               </AppLayout>
             </ProtectedRoute>
           }

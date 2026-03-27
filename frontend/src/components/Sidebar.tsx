@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Smartphone, LayoutDashboard, Cpu, Settings, LogOut, ChevronLeft, ChevronRight, Package } from 'lucide-react'
+import { Smartphone, LayoutDashboard, Cpu, Settings, LogOut, ChevronLeft, ChevronRight, Package, Download } from 'lucide-react'
 import { useAuthStore } from '../store/auth'
 import clsx from 'clsx'
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" /> },
   { to: '/devices', label: 'Devices', icon: <Cpu className="w-5 h-5" /> },
+  { to: '/firmware', label: 'Firmware', icon: <Download className="w-5 h-5" /> },
   { to: '/store', label: 'App Store', icon: <Package className="w-5 h-5" /> },
   { to: '/settings', label: 'Settings', icon: <Settings className="w-5 h-5" /> },
 ]
