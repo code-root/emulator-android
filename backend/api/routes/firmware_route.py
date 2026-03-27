@@ -17,9 +17,10 @@ POST   /api/firmware/sync              Scan disk and import new packages to data
 
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from api.deps import get_current_user, get_db
 from core.firmware.downloader import (
@@ -34,6 +35,7 @@ from config import settings
 from db.models import User, FirmwareEntry
 from pathlib import Path
 from datetime import datetime
+from core.firmware.samfw import resolve_firmware_meta
 
 router = APIRouter(prefix="/firmware", tags=["firmware"])
 
@@ -148,6 +150,76 @@ async def get_firmware_sources(
         "description": f"Tries primary sources, then {fallback_count} user-configured fallback(s), then custom URL if provided",
         "how_to_add_fallback": "Set FIRMWARE_FALLBACK_SOURCES environment variable with semicolon-separated URLs"
     }
+
+
+@router.post("/upload")
+async def upload_firmware_file(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> FirmwareEntryResponse:
+    """
+    Upload a firmware file manually.
+
+    Supports: .zip, .tar, .tar.md5
+
+    The system automatically:
+    1. Parses the filename to extract model, AP version, CSC
+    2. Saves the file to FIRMWARE_PACKAGES_DIR
+    3. Creates/updates FirmwareEntry in database
+    4. Returns detected metadata
+
+    Example filenames:
+    - SAMFW.COM_SM-G996B_EGY_G996BXXSJHZC2_fac.zip
+    - AP_S721BXXS3AYB8_S721BXXS3AYB8_MQB93088282.tar.md5
+    - AP_S921BXXU6GUB1_S921BOXM6GUB1_MQB93088282.tar
+    """
+    lower = (file.filename or "").lower()
+    if not any(lower.endswith(e) for e in (".zip", ".tar.md5", ".tar")):
+        raise HTTPException(400, "Unsupported format. Use .zip, .tar, or .tar.md5")
+
+    # Read file data
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Empty file")
+
+    # Save to disk
+    safe_name = Path(file.filename).name
+    firmware_dir = Path(settings.FIRMWARE_PACKAGES_DIR)
+    firmware_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = firmware_dir / safe_name
+    dest_path.write_bytes(data)
+
+    # Auto-detect metadata from filename
+    meta = resolve_firmware_meta(safe_name) or {}
+
+    # Upsert FirmwareEntry by filename
+    existing = db.query(FirmwareEntry).filter(FirmwareEntry.filename == safe_name).first()
+
+    if existing:
+        existing.size_bytes = len(data)
+        existing.local_path = str(dest_path)
+        db.commit()
+        db.refresh(existing)
+        return FirmwareEntryResponse.from_orm(existing)
+
+    # Create new entry
+    entry = FirmwareEntry(
+        source=meta.get("source", "manual"),
+        device_model=meta.get("device_model"),
+        sales_code=meta.get("sales_code"),
+        ap_version=meta.get("ap_version"),
+        csc_version=meta.get("csc_version"),
+        package_variant=meta.get("package_variant"),
+        filename=safe_name,
+        size_bytes=len(data),
+        local_path=str(dest_path),
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+
+    return FirmwareEntryResponse.from_orm(entry)
 
 
 @router.post("/download")

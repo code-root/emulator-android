@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Download, Trash2, Loader2, AlertCircle, CheckCircle, Play, RefreshCw, Plus, X, Edit2 } from 'lucide-react'
+import { Download, Trash2, Loader2, AlertCircle, CheckCircle, Play, RefreshCw, Plus, X, Edit2, UploadCloud } from 'lucide-react'
 import {
   getDeviceProfiles,
   startFirmwareDownload,
@@ -13,6 +13,7 @@ import {
   updateFirmwareEntry,
   deleteFirmwareEntry,
   syncFirmwareEntries,
+  uploadFirmwareFile,
 } from '../api/client'
 import type { FirmwareJob, FirmwareEntry } from '../api/client'
 import clsx from 'clsx'
@@ -50,6 +51,10 @@ export default function FirmwareManager() {
     notes: '',
   })
   const [editingEntryId, setEditingEntryId] = useState<number | null>(null)
+
+  // Upload state
+  const [dragOver, setDragOver] = useState(false)
+  const [lastUploaded, setLastUploaded] = useState<FirmwareEntry | null>(null)
 
   const { data: profiles = [] } = useQuery({
     queryKey: ['device-profiles'],
@@ -152,6 +157,21 @@ export default function FirmwareManager() {
     },
   })
 
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => uploadFirmwareFile(file),
+    onSuccess: (entry) => {
+      setLastUploaded(entry)
+      setStatusMsg(`Uploaded: ${entry.device_model ?? 'Unknown'} / ${entry.ap_version ?? entry.filename}`)
+      setError(null)
+      queryClient.invalidateQueries({ queryKey: ['firmware-entries'] })
+      queryClient.invalidateQueries({ queryKey: ['firmware-packages'] })
+    },
+    onError: (e: Error) => {
+      setError(String(e))
+      setStatusMsg(null)
+    },
+  })
+
   // If we have a polling job and it's done, stop polling
   useEffect(() => {
     if (pollingJobId) {
@@ -161,6 +181,17 @@ export default function FirmwareManager() {
       }
     }
   }, [pollingJobId, jobs])
+
+  function onFiles(files: FileList | null) {
+    if (!files?.[0]) return
+    const name = files[0].name.toLowerCase()
+    if (!name.endsWith('.zip') && !name.endsWith('.tar') && !name.endsWith('.tar.md5')) {
+      setError('Unsupported format. Use .zip, .tar, or .tar.md5')
+      return
+    }
+    setLastUploaded(null)
+    uploadMutation.mutate(files[0])
+  }
 
   return (
     <div className="space-y-6">
@@ -231,6 +262,56 @@ export default function FirmwareManager() {
             Start Download
           </button>
         </div>
+      </div>
+
+      {/* Upload Firmware */}
+      <div className="card space-y-3">
+        <h3 className="font-semibold text-gray-200">Upload Firmware</h3>
+        <div
+          onDragOver={(e) => {
+            e.preventDefault()
+            setDragOver(true)
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault()
+            setDragOver(false)
+            onFiles(e.dataTransfer.files)
+          }}
+          className={clsx(
+            'border-2 border-dashed rounded-lg p-6 text-center transition-colors space-y-2 cursor-pointer',
+            dragOver ? 'border-blue-400 bg-blue-900/20' : 'border-gray-600 bg-gray-900/30'
+          )}
+        >
+          <UploadCloud className="w-8 h-8 mx-auto text-gray-400" />
+          <p className="text-sm text-gray-300">Drag firmware file here</p>
+          <p className="text-xs text-gray-500">.zip · .tar · .tar.md5</p>
+          <label className="btn-secondary btn-sm cursor-pointer inline-block">
+            Browse
+            <input
+              type="file"
+              accept=".zip,.tar,.tar.md5"
+              hidden
+              onChange={(e) => onFiles(e.target.files)}
+              disabled={uploadMutation.isPending}
+            />
+          </label>
+          {uploadMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mx-auto text-blue-400" />}
+        </div>
+
+        {/* Auto-detected result */}
+        {lastUploaded && (
+          <div className="bg-green-900/20 border border-green-800 rounded-lg p-3 text-sm text-green-300 space-y-1">
+            <p className="font-semibold">✅ Detected:</p>
+            <p>Model: {lastUploaded.device_model ?? '—'}</p>
+            <p>AP Version: {lastUploaded.ap_version ?? '—'}</p>
+            <p>CSC: {lastUploaded.sales_code ?? '—'}</p>
+            <p>Source: {lastUploaded.source}</p>
+            {lastUploaded.filename && (
+              <p className="text-xs text-gray-400 font-mono truncate">File: {lastUploaded.filename}</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Active Downloads */}

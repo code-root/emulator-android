@@ -522,6 +522,16 @@ export async function getFirmwareSources(): Promise<{ sources: Array<{ name: str
   return res.data
 }
 
+export async function uploadFirmwareFile(file: File): Promise<FirmwareEntry> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await apiClient.post<FirmwareEntry>('/api/firmware/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 600_000,
+  })
+  return res.data
+}
+
 // ─── WebSocket URL helper ──────────────────────────────────────────────────
 /**
  * WebSocket origin:
