@@ -154,7 +154,7 @@ async def get_firmware_sources(
 
 
 @router.post("/upload")
-async def upload_firmware_file(
+def upload_firmware_file(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
@@ -180,7 +180,7 @@ async def upload_firmware_file(
         raise HTTPException(400, "Unsupported format. Use .zip, .tar, or .tar.md5")
 
     # Read file data
-    data = await file.read()
+    data = file.file.read()
     if not data:
         raise HTTPException(400, "Empty file")
 
