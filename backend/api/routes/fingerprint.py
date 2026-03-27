@@ -9,7 +9,13 @@ from api.deps import get_db, get_current_user
 from db.models import Device, DeviceFingerprint, User, DeviceStatus
 from core.fingerprint.generator import FingerprintGenerator
 from core.fingerprint.spoofer import FingerprintSpoofer
-from core.fingerprint.samsung_enhanced import is_samsung_fingerprint, merge_profile_defaults_for_apply
+from core.fingerprint.merge import fingerprint_row_to_apply_dict
+from core.fingerprint.samsung_enhanced import (
+    is_samsung_fingerprint,
+    merge_profile_defaults_for_apply,
+    samsung_apply_user_notes,
+)
+from core.emulator.avd import sync_avd_hardware_with_fingerprint
 from core.tools.adb import ADBTool
 
 router = APIRouter(prefix="/devices", tags=["fingerprint"])
@@ -120,6 +126,7 @@ async def update_fingerprint(
 
     await db.flush()
     await db.refresh(fp)
+    sync_avd_hardware_with_fingerprint(device.avd_name, fp)
     return fp
 
 
@@ -135,47 +142,22 @@ async def apply_fingerprint(
     if device.status != DeviceStatus.running or not device.adb_serial:
         raise HTTPException(status_code=400, detail="Device must be running to apply fingerprint")
 
-    fp_data = {
-        "imei": fp.imei,
-        "android_id": fp.android_id,
-        "mac_address": fp.mac_address,
-        "device_model": fp.device_model,
-        "manufacturer": fp.manufacturer,
-        "brand": fp.brand,
-        "device_codename": fp.device_codename,
-        "build_fingerprint": fp.build_fingerprint,
-        "sdk_version": fp.sdk_version,
-        "android_version": fp.android_version,
-        "board": fp.board,
-        "hardware": fp.hardware,
-        "serial_number": fp.serial_number,
-        "latitude": fp.latitude,
-        "longitude": fp.longitude,
-        "altitude": fp.altitude,
-        "network_type": fp.network_type,
-        "ip_address": fp.ip_address,
-        "timezone": fp.timezone,
-        "language": fp.language,
-        "country": fp.country,
-        "ap_version": fp.ap_version,
-        "csc_version": fp.csc_version,
-        "console_port": device.console_port,
-    }
+    fp_data = fingerprint_row_to_apply_dict(
+        fp, {"console_port": device.console_port}
+    )
+    fp_data.pop("_extended_raw", None)
     fp_merged = merge_profile_defaults_for_apply(fp_data)
 
     try:
         result = await fp_spoofer.apply(adb_tool, device.adb_serial, fp_merged)
         deep = is_samsung_fingerprint(fp_merged)
+        note, detail = samsung_apply_user_notes(deep)
         return {
             "success": True,
             "report": result,
             "samsung_extended_spoof": deep,
-            "note": (
-                "تمت محاولة عشرات خصائص ro.product/ro.vendor/ro.csc و settings السطحية. "
-                "ما زال النظام AOSP وليس روم Samsung؛ المفاتيح المرفوضة في report.failed."
-                if deep
-                else None
-            ),
+            "note": note,
+            "detail": detail,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Apply failed: {e}")
@@ -197,19 +179,26 @@ async def randomize_fingerprint(
         db.add(fp)
 
     for key, value in new_fp_data.items():
-        if hasattr(fp, key):
+        if key == "extended" and value is not None:
+            import json as _json
+
+            fp.extended_json = _json.dumps(value, ensure_ascii=False)
+        elif hasattr(fp, key):
             setattr(fp, key, value)
 
     await db.flush()
     await db.refresh(fp)
+    sync_avd_hardware_with_fingerprint(device.avd_name, fp)
 
     if apply and device.status == DeviceStatus.running and device.adb_serial:
         try:
-            fp_data = new_fp_data.copy()
-            fp_data["console_port"] = device.console_port
+            fp_data = fingerprint_row_to_apply_dict(
+                fp, {"console_port": device.console_port}
+            )
+            fp_data.pop("_extended_raw", None)
+            fp_data = merge_profile_defaults_for_apply(fp_data)
             await fp_spoofer.apply(adb_tool, device.adb_serial, fp_data)
-        except Exception as e:
-            # Don't fail the randomize if apply fails
+        except Exception:
             pass
 
     return fp

@@ -12,6 +12,112 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+# ملف جهاز AVD: لا يوجد تعريف Samsung رسمي في sdkmanager — نستخدم medium_phone ثم نعدّل config.ini
+_AVD_SAMSUNG_HW_DEVICE = "medium_phone"
+
+
+def _is_samsung_fingerprint_hw(
+    manufacturer: Optional[str], brand: Optional[str], device_model: Optional[str]
+) -> bool:
+    m = (manufacturer or "").lower()
+    b = (brand or "").lower()
+    mod = (device_model or "").upper()
+    return m == "samsung" or b == "samsung" or mod.startswith("SM-G") or mod.startswith("SM-S")
+
+
+def _samsung_lcd_for_model(device_model: Optional[str]) -> Tuple[int, int, int]:
+    """(width, height, density) تقريبية لمواءمة سامسونج شائعة."""
+    mod = (device_model or "").upper()
+    if mod.startswith("SM-G996") or mod.startswith("SM-G991"):
+        return 1080, 2400, 420
+    if mod.startswith("SM-S90"):
+        return 1080, 2340, 420
+    return 1080, 2400, 420
+
+
+def _upsert_avd_config_line(content: str, key: str, value: str) -> str:
+    lines = content.splitlines(keepends=True)
+    if not lines:
+        return f"{key}={value}\n"
+    key_eq = f"{key}="
+    out: List[str] = []
+    found = False
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith(key_eq) or stripped.split("=", 1)[0].strip() == key:
+            out.append(f"{key}={value}\n")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        if out and not out[-1].endswith("\n"):
+            out[-1] = out[-1] + "\n"
+        out.append(f"{key}={value}\n")
+    return "".join(out)
+
+
+def write_avd_hardware_overlay(
+    avd_name: str,
+    manufacturer: Optional[str],
+    brand: Optional[str],
+    device_model: Optional[str],
+) -> None:
+    """
+    يحدّث ~/.android/avd/<name>.avd/config.ini ليطابق هوية سامسونج في نافذة خصائص المحاكي
+    (hw.device.manufacturer / الاسم / الشاشة). لا يغيّر system image.
+    """
+    if not _is_samsung_fingerprint_hw(manufacturer, brand, device_model):
+        return
+    cfg = Path.home() / ".android" / "avd" / f"{avd_name}.avd" / "config.ini"
+    if not cfg.is_file():
+        logger.warning("AVD config.ini missing, skip hardware overlay: %s", cfg)
+        return
+    w, h, density = _samsung_lcd_for_model(device_model)
+    try:
+        text = cfg.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        logger.warning("read AVD config failed %s: %s", cfg, e)
+        return
+    text = _upsert_avd_config_line(text, "hw.device.manufacturer", "Samsung")
+    text = _upsert_avd_config_line(text, "hw.device.name", _AVD_SAMSUNG_HW_DEVICE)
+    text = _upsert_avd_config_line(text, "hw.lcd.width", str(w))
+    text = _upsert_avd_config_line(text, "hw.lcd.height", str(h))
+    text = _upsert_avd_config_line(text, "hw.lcd.density", str(density))
+    try:
+        cfg.write_text(text, encoding="utf-8")
+        logger.info("AVD hardware overlay applied for %s (Samsung / %s)", avd_name, device_model)
+    except OSError as e:
+        logger.warning("write AVD config failed %s: %s", cfg, e)
+
+
+def sync_avd_hardware_with_fingerprint(avd_name: Optional[str], fp: Any) -> None:
+    """
+    بعد حفظ البصمة في DB (إنشاء/تحديث/عشوائي/revert): يحدّث config.ini للمحاكي
+    إن كانت البصمة سامسونج؛ يُستدعى من مسارات API دون انتظار تشغيل الجهاز.
+    """
+    if not avd_name or fp is None:
+        return
+    write_avd_hardware_overlay(
+        avd_name,
+        getattr(fp, "manufacturer", None),
+        getattr(fp, "brand", None),
+        getattr(fp, "device_model", None),
+    )
+
+
+async def load_fingerprint_hw_fields(device_id: int) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """(manufacturer, brand, device_model) من جدول البصمة."""
+    from db.database import AsyncSessionLocal
+    from db.models import DeviceFingerprint
+    from sqlalchemy import select
+
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(DeviceFingerprint).where(DeviceFingerprint.device_id == device_id))
+        fp = r.scalar_one_or_none()
+        if not fp:
+            return None, None, None
+        return fp.manufacturer, fp.brand, fp.device_model
+
 
 def _java_major_from_java_bin(java_bin: Path) -> Optional[int]:
     try:
@@ -178,7 +284,9 @@ class AVDBackend:
     async def ensure_avd_exists(self, device) -> bool:
         """If the AVD was never created (e.g. failed background job), create it now."""
         avd_name = device.avd_name
+        manu, brand, model = await load_fingerprint_hw_fields(device.id)
         if self._default_avd_ini_path(avd_name).is_file():
+            write_avd_hardware_overlay(avd_name, manu, brand, model)
             return True
         arch = normalize_system_image_arch(device.arch)
         api_level = int(device.api_level or 31)
@@ -188,9 +296,27 @@ class AVDBackend:
             api_level,
             arch,
         )
-        return await self.create_avd(avd_name, api_level=api_level, arch=arch)
+        ok = await self.create_avd(
+            device_name=avd_name,
+            api_level=api_level,
+            arch=arch,
+            manufacturer=manu,
+            brand=brand,
+            device_model=model,
+        )
+        if ok:
+            write_avd_hardware_overlay(avd_name, manu, brand, model)
+        return ok
 
-    async def create_avd(self, device_name: str, api_level: int = 31, arch: str = "x86_64") -> bool:
+    async def create_avd(
+        self,
+        device_name: str,
+        api_level: int = 31,
+        arch: str = "x86_64",
+        manufacturer: Optional[str] = None,
+        brand: Optional[str] = None,
+        device_model: Optional[str] = None,
+    ) -> bool:
         """Create a new AVD using avdmanager."""
         arch = normalize_system_image_arch(arch)
         system_image = f"system-images;android-{api_level};google_apis;{arch}"
@@ -209,11 +335,15 @@ class AVDBackend:
             existing_avds = stdout.decode(errors="replace")
             if device_name in existing_avds:
                 logger.info(f"AVD {device_name} already exists")
+                write_avd_hardware_overlay(device_name, manufacturer, brand, device_model)
                 return True
         except Exception as e:
             logger.warning(f"Could not list AVDs: {e}")
 
-        hw_profile = "pixel_8" if api_level >= 35 else "pixel_6"
+        if _is_samsung_fingerprint_hw(manufacturer, brand, device_model):
+            hw_profile = _AVD_SAMSUNG_HW_DEVICE
+        else:
+            hw_profile = "pixel_8" if api_level >= 35 else "pixel_6"
 
         # Create AVD
         cmd = [
@@ -241,7 +371,8 @@ class AVDBackend:
             output = stdout.decode(errors="replace")
             err_output = stderr.decode(errors="replace")
             if proc.returncode == 0:
-                logger.info(f"AVD {device_name} created successfully")
+                logger.info(f"AVD {device_name} created successfully (hw.device={hw_profile})")
+                write_avd_hardware_overlay(device_name, manufacturer, brand, device_model)
                 return True
             else:
                 combined = "\n".join(x for x in (output.strip(), err_output.strip()) if x)

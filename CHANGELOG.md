@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Fingerprint hub (`/api/fingerprint/*`), `extended_json`, revision snapshots / revert / compare, consistency checks on apply.
+- Samsung-oriented AVD `config.ini` overlay (`medium_phone` + Samsung manufacturer/LCD); sync on fingerprint updates and on start.
+- SAMFW Odin folder merge (e.g. XSG) with product-segment tweak; `backend/tests/test_firmware_xsg.py`.
+- Device create: optional `firmware_package`; UI firmware dropdown; default Samsung G996B preset.
+- Auto fingerprint + anti-detect apply after emulator boot; anti-detect CPU/characteristics improvements; Frida templates under `scripts/frida/`.
+- Optional H.264 WebSocket path (where enabled); touch **auto** mode on device screen; App Store install UX tweaks.
+- **README:** “Recent updates (March 2026)” (EN + AR) documenting the above.
+
 ## [1.0.1] — 2026-03-26
 
 ### Added

@@ -81,6 +81,10 @@ export default function AppStore() {
     },
   })
 
+  const installPending = installMut.isPending ? installMut.variables : null
+  const isInstalling = (apkId: number, deviceId: number) =>
+    installPending?.apkId === apkId && installPending?.deviceId === deviceId
+
   const patchMut = useMutation({
     mutationFn: ({ id, display_name }: { id: number; display_name: string | null }) =>
       patchStoredApk(id, display_name),
@@ -262,19 +266,34 @@ export default function AppStore() {
                         <span className="text-gray-600 text-xs">لا يوجد جهاز شغّال</span>
                       ) : (
                         <div className="flex flex-wrap gap-1">
-                          {runningDevices.map((d: Device) => (
-                            <button
-                              key={d.id}
-                              type="button"
-                              disabled={installMut.isPending}
-                              className="text-xs px-2 py-1 rounded bg-gray-800 text-blue-300 hover:bg-gray-700 border border-gray-700 flex items-center gap-1"
-                              title={`تثبيت على ${d.name}`}
-                              onClick={() => installMut.mutate({ apkId: row.id, deviceId: d.id })}
-                            >
-                              <Download className="w-3 h-3" />
-                              {d.name}
-                            </button>
-                          ))}
+                          {runningDevices.map((d: Device) => {
+                            const busy = isInstalling(row.id, d.id)
+                            return (
+                              <button
+                                key={d.id}
+                                type="button"
+                                disabled={installMut.isPending}
+                                className={clsx(
+                                  'text-xs px-2 py-1 rounded border flex items-center gap-1 min-w-[7rem] justify-center transition-colors',
+                                  busy
+                                    ? 'bg-blue-900/40 text-blue-200 border-blue-700/60 cursor-wait'
+                                    : 'bg-gray-800 text-blue-300 hover:bg-gray-700 border-gray-700',
+                                  installMut.isPending && !busy && 'opacity-45 cursor-not-allowed'
+                                )}
+                                title={busy ? `جاري التثبيت على ${d.name}…` : `تثبيت على ${d.name}`}
+                                onClick={() => installMut.mutate({ apkId: row.id, deviceId: d.id })}
+                              >
+                                {busy ? (
+                                  <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin" />
+                                ) : (
+                                  <Download className="w-3 h-3 shrink-0" />
+                                )}
+                                <span className="truncate max-w-[140px]">
+                                  {busy ? 'جاري التثبيت…' : d.name}
+                                </span>
+                              </button>
+                            )
+                          })}
                         </div>
                       )}
                     </td>

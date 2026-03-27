@@ -136,6 +136,7 @@ class DeviceScheduler:
                     logger.warning(f"Device {device_id} process {device.pid} is dead — marking as stopped")
                     device.status = DeviceStatus.stopped
                     device.pid = None
+                    device.adb_serial = None
                     await db.commit()
                     await ws_manager.broadcast(
                         device_id,

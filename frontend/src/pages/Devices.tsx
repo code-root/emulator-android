@@ -2,7 +2,15 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Search, Trash2, Play, Square, Eye, Loader2, Cpu } from 'lucide-react'
-import { getDevices, createDevice, startDevice, stopDevice, deleteDevice, getDevicePresets } from '../api/client'
+import {
+  getDevices,
+  createDevice,
+  startDevice,
+  stopDevice,
+  deleteDevice,
+  getDevicePresets,
+  getFirmwarePackages,
+} from '../api/client'
 import type { Device, DeviceCreateForm, DeviceStatus } from '../types'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
@@ -31,7 +39,9 @@ function CreateDeviceModal({ onClose }: { onClose: () => void }) {
     cpu_cores: 2,
     api_level: 31,
     arch: 'x86_64',
-    preset: null,
+    // افتراضي: Samsung G996B + Android 15 متوافق مع البصمة وصور النظام
+    preset: 'samsung_sm_g996b_android15',
+    firmware_package: null,
   })
 
   const { data: presets = [] } = useQuery({
@@ -39,8 +49,17 @@ function CreateDeviceModal({ onClose }: { onClose: () => void }) {
     queryFn: getDevicePresets,
   })
 
+  const { data: firmwarePackages = [] } = useQuery({
+    queryKey: ['firmware-packages'],
+    queryFn: getFirmwarePackages,
+  })
+
   const mutation = useMutation({
-    mutationFn: () => createDevice(form),
+    mutationFn: () => {
+      const payload = { ...form }
+      if (!payload.firmware_package) delete payload.firmware_package
+      return createDevice(payload)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['devices'] })
       onClose()
@@ -80,6 +99,33 @@ function CreateDeviceModal({ onClose }: { onClose: () => void }) {
             </select>
             <p className="text-xs text-gray-500 mt-1">
               عند اختيار preset يُضبط مستوى API والبصمة تلقائياً (يتطلب تثبيت system-images;android-35 عبر sdkmanager).
+            </p>
+          </div>
+          <div>
+            <label className="label">حزمة فريموير (اختياري — مواءمة AP/CSC مع Odin/SAMFW)</label>
+            <select
+              className="input"
+              value={form.firmware_package ?? ''}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  firmware_package: e.target.value || null,
+                })
+              }
+            >
+              <option value="">بدون — بصمة من الموديل فقط</option>
+              {firmwarePackages.map((fw) => (
+                <option key={fw.filename} value={fw.filename}>
+                  {fw.filename}
+                  {fw.kind === 'directory' ? ' (مجلد)' : ' (ZIP)'}
+                  {fw.ap_version ? ` — AP ${fw.ap_version}` : ''}
+                  {fw.sales_code ? ` · ${fw.sales_code}` : ''}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              ضع الملفات تحت مجلد <code className="text-gray-400">firmware/</code> في المشروع؛ لا تُفلش على AVD،
+              فقط تُحدّث بصمة الجهاز عند الإنشاء.
             </p>
           </div>
           <div>

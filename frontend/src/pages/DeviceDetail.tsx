@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -6,7 +6,7 @@ import {
   Monitor, Fingerprint, AppWindow, Shield, Terminal, ScrollText, Info
 } from 'lucide-react'
 import { getDevice, startDevice, stopDevice, restartDevice, executeShell } from '../api/client'
-import { useWebSocket } from '../hooks/useWebSocket'
+import { useWebSocket, useDeviceH264 } from '../hooks/useWebSocket'
 import DeviceScreen from '../components/DeviceScreen'
 import FingerprintEditor from '../components/FingerprintEditor'
 import APKInstaller from '../components/APKInstaller'
@@ -105,7 +105,31 @@ export default function DeviceDetail() {
     refetchInterval: 10_000,
   })
 
-  const { lastMessage, isConnected, sendMessage, liveScreenshot } = useWebSocket(deviceId)
+  const liveStatus: DeviceStatus = (currentStatus || device?.status || 'created') as DeviceStatus
+  const isRunning = liveStatus === 'running'
+
+  /* JPEG افتراضياً — H.264 يعتمد على screenrecord وقد لا يعمل على كل المحاكيات */
+  const [screenStreamMode, setScreenStreamMode] = useState<'jpeg' | 'h264'>('jpeg')
+  const jpegWsEnabled = !isRunning || screenStreamMode === 'jpeg'
+  const {
+    lastMessage,
+    isConnected: jpegConnected,
+    sendMessage,
+    liveScreenshot,
+    adbUnavailable,
+  } = useWebSocket(deviceId, { enabled: jpegWsEnabled })
+
+  const h264CanvasRef = useRef<HTMLCanvasElement>(null)
+  const fallbackToJpeg = useCallback(() => setScreenStreamMode('jpeg'), [])
+  const h264 = useDeviceH264(deviceId, {
+    enabled: isRunning && screenStreamMode === 'h264',
+    canvasRef: h264CanvasRef,
+    onGiveUp: fallbackToJpeg,
+  })
+
+  const sendControl = screenStreamMode === 'jpeg' ? sendMessage : h264.sendControl
+  const controlConnected =
+    screenStreamMode === 'jpeg' ? jpegConnected : h264.isConnected
 
   useEffect(() => {
     if (lastMessage?.type === 'status' && lastMessage.status) {
@@ -113,8 +137,6 @@ export default function DeviceDetail() {
       queryClient.invalidateQueries({ queryKey: ['device', deviceId] })
     }
   }, [lastMessage, deviceId, queryClient])
-
-  const liveStatus: DeviceStatus = (currentStatus || device?.status || 'created') as DeviceStatus
 
   const startMutation = useMutation({
     mutationFn: () => startDevice(deviceId),
@@ -148,7 +170,6 @@ export default function DeviceDetail() {
     )
   }
 
-  const isRunning = liveStatus === 'running'
   const isBusy = startMutation.isPending || stopMutation.isPending || restartMutation.isPending
 
   return (
@@ -168,7 +189,7 @@ export default function DeviceDetail() {
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-bold text-gray-100">{device.name}</h1>
               <span className={STATUS_BADGE[liveStatus]}>{liveStatus}</span>
-              {isConnected && (
+              {controlConnected && isRunning && (
                 <span className="flex items-center gap-1 text-xs text-green-400">
                   <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
                   Live
@@ -274,15 +295,25 @@ export default function DeviceDetail() {
         <div className="card">
           <h3 className="font-semibold text-gray-200 mb-1">شاشة حية — تحكم مثل المحاكي</h3>
           <p className="text-xs text-gray-500 mb-4">
-            بث سريع عبر السيرفر (ADB). للأداء الأقصى لاحقاً يمكن ربط scrcpy مباشرة.
+            JPEG عبر لقطات ADB، أو H.264 عبر <code className="text-gray-400">screenrecord</code> و WebCodecs
+            (تأخير أقل). يتطلب متصفحاً يدعم VideoDecoder.
           </p>
           <DeviceScreen
             deviceId={deviceId}
             serial={device.adb_serial}
             isRunning={isRunning}
-            sendMessage={sendMessage}
-            isConnected={isConnected}
+            sendControl={sendControl}
+            controlConnected={controlConnected}
+            jpegConnected={jpegConnected}
             liveScreenshot={liveScreenshot}
+            adbUnavailable={screenStreamMode === 'jpeg' ? adbUnavailable : null}
+            screenStreamMode={screenStreamMode}
+            onScreenStreamModeChange={setScreenStreamMode}
+            h264CanvasRef={h264CanvasRef}
+            h264StreamWidth={h264.streamWidth}
+            h264StreamHeight={h264.streamHeight}
+            h264Error={h264.error}
+            h264Status={h264.status}
           />
         </div>
       )}

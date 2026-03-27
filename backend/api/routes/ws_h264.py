@@ -16,6 +16,7 @@ Latency: < 100 ms  vs  200-600 ms for JPEG screencap.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -95,6 +96,7 @@ async def ws_h264_endpoint(
     control_queue: asyncio.Queue[dict] = asyncio.Queue()
     prefetch:       deque[dict]         = deque()
     streaming_active = asyncio.Event()   # set when serial is available
+    first_video_byte = asyncio.Event()
 
     async def get_serial(force: bool = False) -> str | None:
         now = time.monotonic()
@@ -107,8 +109,28 @@ async def ws_h264_endpoint(
         serial_state.update(serial=serial, cached_at=time.monotonic())
         return serial
 
+    stall_watch_task: asyncio.Task[None] | None = None
+
+    async def stall_watch() -> None:
+        """Notify client if encoder never produces bytes (stderr pipe, API level, no ADB, …)."""
+        try:
+            await asyncio.sleep(20.0)
+            if first_video_byte.is_set():
+                return
+            await websocket.send_json({
+                "type":    "h264_error",
+                "code":    "no_video_data",
+                "message": "لم يُرسل الخادم أي بيانات H.264 خلال 20 ثانية. "
+                           "تأكد أن الجهاز يعمل وADB متصل، أو جرّب وضع JPEG.",
+            })
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+
     # ── H.264 streaming task ──────────────────────────────────────────────────
     async def stream_task() -> None:
+        nonlocal stall_watch_task
         streamer = H264Streamer()
         while True:
             serial = await get_serial(force=True)
@@ -118,6 +140,13 @@ async def ws_h264_endpoint(
             streaming_active.set()
             try:
                 async for binary_msg in streamer.stream(serial, width=720, height=1280, bit_rate="3M", fps=30):
+                    if not first_video_byte.is_set():
+                        first_video_byte.set()
+                        if stall_watch_task and not stall_watch_task.done():
+                            stall_watch_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await stall_watch_task
+                            stall_watch_task = None
                     try:
                         await websocket.send_bytes(binary_msg)
                     except WebSocketDisconnect:
@@ -189,6 +218,7 @@ async def ws_h264_endpoint(
             except Exception as exc:
                 logger.debug("ADB control error: %s", exc)
 
+    stall_watch_task = asyncio.create_task(stall_watch())
     stream_t  = asyncio.create_task(stream_task())
     control_t = asyncio.create_task(control_task())
 
@@ -233,6 +263,10 @@ async def ws_h264_endpoint(
     except Exception as exc:
         logger.error("H264 WS error — device %d: %s", device_id, exc)
     finally:
+        if stall_watch_task and not stall_watch_task.done():
+            stall_watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stall_watch_task
         stream_t.cancel()
         control_t.cancel()
         await asyncio.gather(stream_t, control_t, return_exceptions=True)

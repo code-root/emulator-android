@@ -6,6 +6,7 @@ import type {
   DeviceFingerprint,
   DevicePresetMeta,
   DeviceProfileMeta,
+  FirmwarePackageMeta,
   InstallResult,
   OperationLog,
   PackageList,
@@ -105,10 +106,28 @@ export async function executeShell(id: number, cmd: string): Promise<ShellResult
 }
 
 export async function getScreenshot(id: number): Promise<Blob> {
-  const res = await apiClient.get(`/api/devices/${id}/screenshot`, {
-    responseType: 'blob',
-  })
-  return res.data
+  try {
+    const res = await apiClient.get(`/api/devices/${id}/screenshot`, {
+      responseType: 'blob',
+    })
+    return res.data
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 503) {
+      const data = err.response.data
+      let msg = 'الجهاز غير متصل بـ ADB'
+      if (data instanceof Blob) {
+        try {
+          const text = await data.text()
+          const j = JSON.parse(text) as { detail?: string }
+          if (typeof j.detail === 'string' && j.detail.length) msg = j.detail
+        } catch {
+          /* ignore */
+        }
+      }
+      throw new Error(msg)
+    }
+    throw err
+  }
 }
 
 export async function getDeviceLogs(id: number, limit = 100): Promise<OperationLog[]> {
@@ -140,6 +159,7 @@ export async function applyFingerprint(id: number): Promise<{
   report: { applied?: string[]; failed?: string[]; warnings?: string[] }
   samsung_extended_spoof?: boolean
   note?: string | null
+  detail?: string | null
 }> {
   const res = await apiClient.post(`/api/devices/${id}/fingerprint/apply`)
   return res.data
@@ -258,15 +278,42 @@ export async function getDevicePresets(): Promise<DevicePresetMeta[]> {
   return res.data
 }
 
+export async function getFirmwarePackages(): Promise<FirmwarePackageMeta[]> {
+  const res = await apiClient.get<FirmwarePackageMeta[]>('/api/meta/firmware-packages')
+  return res.data
+}
+
 // ─── WebSocket URL helper ──────────────────────────────────────────────────
+/**
+ * WebSocket origin:
+ * - If `VITE_API_URL` is set → same host as REST (recommended in dev).
+ * - Vite dev without env → `ws://localhost:8000` (matches vite.config proxy target;
+ *   avoids `ws://localhost:5173` + flaky /ws proxy and React StrictMode teardown noise).
+ * - Production build without env → same host as the page (reverse-proxy deployment).
+ */
+function getWebSocketBase(): string {
+  if (BASE_URL) {
+    return BASE_URL.replace(/\/$/, '').replace(/^http/, 'ws')
+  }
+  if (typeof window !== 'undefined') {
+    if (import.meta.env.DEV) {
+      return 'ws://localhost:8000'
+    }
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${protocol}//${window.location.host}`
+  }
+  return 'ws://localhost:8000'
+}
+
 export function getWebSocketUrl(deviceId: number): string {
   const token = encodeURIComponent(localStorage.getItem('token') ?? '')
-  if (typeof window !== 'undefined') {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = window.location.host
-    return `${protocol}//${host}/ws/${deviceId}?token=${token}`
-  }
-  const origin = BASE_URL || 'http://localhost:8000'
-  const wsOrigin = origin.replace(/^http/, 'ws')
-  return `${wsOrigin}/ws/${deviceId}?token=${token}`
+  const base = getWebSocketBase()
+  return `${base}/ws/${deviceId}?token=${token}`
+}
+
+/** Low-latency H.264 mirror (ADB screenrecord → WebCodecs). See `/ws/{id}/h264`. */
+export function getWebSocketH264Url(deviceId: number): string {
+  const token = encodeURIComponent(localStorage.getItem('token') ?? '')
+  const base = getWebSocketBase()
+  return `${base}/ws/${deviceId}/h264?token=${token}`
 }

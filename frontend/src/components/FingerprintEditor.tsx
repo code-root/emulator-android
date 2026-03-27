@@ -34,6 +34,7 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
   const [form, setForm] = useState<Partial<DeviceFingerprint>>({})
   const [error, setError] = useState<string | null>(null)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
+  const [applyDetail, setApplyDetail] = useState<string | null>(null)
 
   const { data: fp, isLoading } = useQuery({
     queryKey: ['fingerprint', deviceId],
@@ -93,6 +94,7 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
       setForm({ ...data })
       queryClient.invalidateQueries({ queryKey: ['fingerprint', deviceId] })
       setStatusMsg('Randomized')
+      setApplyDetail(null)
       setError(null)
     },
     onError: (e: Error) => {
@@ -106,19 +108,19 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
     onSuccess: (data) => {
       const n = data.report?.applied?.length ?? 0
       const f = data.report?.failed?.length ?? 0
-      const extra = data.note ? ` ${data.note}` : ''
       if (data.samsung_extended_spoof) {
-        setStatusMsg(
-          `Samsung extended spoof: ${n} props accepted, ${f} rejected (normal on AVD).${extra}`
-        )
+        setStatusMsg(`تطبيق بصمة Samsung: ${n} خاصية نُفّذت، ${f} رُفضت على AVD (متوقع).`)
+        setApplyDetail(data.detail ?? data.note ?? null)
       } else {
-        setStatusMsg(`Fingerprint apply: ${n} ok, ${f} failed (userdebug/root helps).`)
+        setStatusMsg(`تطبيق البصمة: ${n} نجح، ${f} فشل (root يحسّن النتيجة).`)
+        setApplyDetail(null)
       }
       setError(null)
     },
     onError: (e: Error) => {
       setError(String(e))
       setStatusMsg(null)
+      setApplyDetail(null)
     },
   })
 
@@ -186,7 +188,14 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
           )}
         >
           {error ? <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" /> : null}
-          <span>{error || statusMsg}</span>
+          <div className="min-w-0 flex flex-col gap-1.5">
+            <span>{error || statusMsg}</span>
+            {!error && applyDetail ? (
+              <p className="text-xs leading-relaxed text-green-200/85 border-t border-green-800/50 pt-1.5">
+                {applyDetail}
+              </p>
+            ) : null}
+          </div>
         </div>
       )}
 

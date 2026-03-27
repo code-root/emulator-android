@@ -71,8 +71,8 @@ EMULATOR_PROPS_OVERRIDE: Dict[str, str] = {
     "ro.product.cpu.abilist32":    "armeabi-v7a,armeabi",
     "ro.product.cpu.abilist64":    "arm64-v8a",
 
-    # ── build characteristics ──────────────────────────────────────────────
-    "ro.build.characteristics":    "nosdcard",
+    # ── build characteristics (يُستبدل في apply() حسب البصمة — ليس emulator) ──
+    "ro.build.characteristics":    "default",
 
     # ── telephony ──────────────────────────────────────────────────────────
     "ro.telephony.default_network":  "9",   # 9 = LTE preferred
@@ -85,6 +85,11 @@ EMULATOR_PROPS_OVERRIDE: Dict[str, str] = {
     "qemu.sf.fake_camera":         "",
     "qemu.gles":                   "",
     "qemu.gles.renderer":          "",
+
+    # ── boot / virtual device flags (فحوصات شائعة) ─────────────────────────
+    "ro.boot.qemu":                "0",
+    "ro.hardware.virtual_device":  "0",
+    "ro.kernel.android.qemud":     "0",
 }
 
 # adb shell settings commands (no root required, user-space settings DB)
@@ -204,8 +209,8 @@ var PROP_SPOOF = {
     "ro.build.tags":           "release-keys",
     "ro.debuggable":           "0",
     "ro.secure":               "1",
-    "ro.product.cpu.abi":      "arm64-v8a",
-    "ro.product.cpu.abilist":  "arm64-v8a,armeabi-v7a,armeabi",
+    "ro.product.cpu.abi":      "{{cpu_abi}}",
+    "ro.product.cpu.abilist":  "{{cpu_abilist}}",
     "qemu.hw.mainkeys":        "",
     "qemu.sf.lcd_density":     "",
 };
@@ -443,6 +448,11 @@ def _render_frida_script(fp: Dict[str, Any]) -> str:
     build_host_str  = "SWDD8524"
     bootloader_str  = fp.get("ap_version", "G996BXXSJHZC2")
 
+    cpu_abi = "arm64-v8a"
+    cpu_abilist = fp.get("cpu_abi_list_spoof") or "arm64-v8a,armeabi-v7a,armeabi"
+    if isinstance(cpu_abilist, str) and "," in cpu_abilist:
+        cpu_abi = cpu_abilist.split(",")[0].strip() or cpu_abi
+
     substitutions = {
         "{{build_fingerprint}}": fingerprint,
         "{{device_model}}":      model,
@@ -462,6 +472,8 @@ def _render_frida_script(fp: Dict[str, Any]) -> str:
         "{{mac_address}}":       mac,
         "{{sdk_version}}":       str(sdk),
         "{{android_version}}":   release,
+        "{{cpu_abi}}":           cpu_abi,
+        "{{cpu_abilist}}":       str(cpu_abilist),
     }
     script = FRIDA_ANTI_DETECT_SCRIPT
     for placeholder, value in substitutions.items():
@@ -510,6 +522,26 @@ class AntiDetect:
         results: Dict[str, List[str]],
     ) -> None:
         props = dict(EMULATOR_PROPS_OVERRIDE)
+
+        abilist = (fp.get("cpu_abi_list_spoof") or "arm64-v8a,armeabi-v7a,armeabi").strip()
+        first_abi = abilist.split(",")[0].strip() or "arm64-v8a"
+        props["ro.product.cpu.abi"] = first_abi
+        props["ro.product.cpu.abilist"] = abilist
+        props["ro.product.cpu.abilist32"] = "armeabi-v7a,armeabi"
+        props["ro.product.cpu.abilist64"] = "arm64-v8a"
+        if "," in abilist:
+            for part in abilist.split(","):
+                p = part.strip()
+                if p in ("arm64-v8a", "x86_64"):
+                    props["ro.product.cpu.abilist64"] = p
+                    break
+
+        manu = (fp.get("manufacturer") or fp.get("brand") or "").lower()
+        hw = (fp.get("hardware") or "").lower()
+        if manu == "samsung" or hw == "qcom":
+            props["ro.build.characteristics"] = "default"
+        elif hw in ("ranchu", "goldfish"):
+            props["ro.build.characteristics"] = "nosdcard"
 
         # Merge hardware values from profile
         if fp.get("hardware"):

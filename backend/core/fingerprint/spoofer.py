@@ -10,6 +10,7 @@ from core.fingerprint.samsung_enhanced import (
     merge_profile_defaults_for_apply,
     samsung_surface_settings_commands,
 )
+from core.fingerprint.anti_detect import anti_detect
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,20 @@ class FingerprintSpoofer:
             n = await self._apply_samsung_surface_settings(adb_tool, serial, fp_merged)
             results["applied"].extend([f"settings:{x}" for x in n.get("ok", [])])
             results["warnings"].extend(n.get("warn", []))
+
+        # Anti-emulator layers (props, optional console, Frida script push)
+        try:
+            ad = await anti_detect.apply(
+                adb_tool,
+                serial,
+                fp_merged,
+                console_port=fp_merged.get("console_port"),
+            )
+            results["applied"].extend(ad.get("applied", []))
+            results["failed"].extend(ad.get("failed", []))
+            results["warnings"].extend(ad.get("warnings", []))
+        except Exception as e:
+            results["warnings"].append(f"anti_detect: {e}")
 
         # Apply Android ID (works without root via settings)
         if fp_merged.get("android_id"):
@@ -92,6 +107,16 @@ class FingerprintSpoofer:
             if ok:
                 results["applied"].append("network_type")
 
+        bl = fp_merged.get("battery_level")
+        if bl is not None and fp_merged.get("console_port"):
+            try:
+                lvl = max(0, min(100, int(bl)))
+                ok = await self._set_battery(adb_tool, serial, lvl, fp_merged["console_port"])
+                if ok:
+                    results["applied"].append(f"battery_console:{lvl}")
+            except (TypeError, ValueError):
+                results["warnings"].append("battery_level invalid")
+
         logger.info(
             f"Fingerprint applied to {serial}: "
             f"{len(results['applied'])} ok, {len(results['failed'])} failed"
@@ -131,6 +156,14 @@ class FingerprintSpoofer:
                 props["ro.build.version.release"] = fp["android_version"]
             if fp.get("sdk_version"):
                 props["ro.build.version.sdk"] = str(fp["sdk_version"])
+            if fp.get("security_patch"):
+                props["ro.build.version.security_patch"] = str(fp["security_patch"])
+            if fp.get("build_id"):
+                props["ro.build.id"] = str(fp["build_id"])
+            if fp.get("product_name"):
+                props["ro.product.name"] = str(fp["product_name"])
+            if fp.get("bootloader_override"):
+                props["ro.bootloader"] = str(fp["bootloader_override"])
             ap = fp.get("ap_version")
             csc = fp.get("csc_version")
             if ap:

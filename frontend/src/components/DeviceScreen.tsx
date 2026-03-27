@@ -1,9 +1,11 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import type { RefObject } from 'react'
 import {
   Loader2,
   RefreshCw,
   MousePointer,
   Hand,
+  Sparkles,
   Maximize2,
   Minimize2,
   Radio,
@@ -12,6 +14,7 @@ import {
 } from 'lucide-react'
 import { getScreenshot } from '../api/client'
 import type { LiveScreenshotFrame } from '../types'
+import type { H264StreamStatus } from '../hooks/useDeviceH264'
 import clsx from 'clsx'
 
 const FPS_PRESETS_MS = [
@@ -30,6 +33,8 @@ const DRAG_SEGMENT_MIN_INTERVAL_MS = 6
 const DRAG_SEGMENT_DURATION_MS = 25
 const DRAG_FINAL_SEGMENT_DURATION_MS = 80
 const DRAG_FALLBACK_SWIPE_MS = 280
+/** وضع تلقائي: حركة أقل من هذا (بكسل الجهاز) بدون مقاطع سحب = يُعامل كلمسة. */
+const AUTO_TAP_MAX_MOVE_SQ = 20 * 20
 
 function clientToDevicePixel(
   el: HTMLImageElement,
@@ -45,22 +50,77 @@ function clientToDevicePixel(
   return { x: Math.round(nx * devW), y: Math.round(ny * devH) }
 }
 
+function clientToDeviceSurface(
+  el: HTMLElement,
+  shot: LiveScreenshotFrame | null,
+  streamW: number | null,
+  streamH: number | null,
+  mode: 'jpeg' | 'h264',
+  clientX: number,
+  clientY: number
+): { x: number; y: number } {
+  const rect = el.getBoundingClientRect()
+  let devW = 1080
+  let devH = 1920
+  if (mode === 'jpeg' && shot) {
+    devW = shot.deviceWidth ?? shot.width
+    devH = shot.deviceHeight ?? shot.height
+  } else if (mode === 'h264' && streamW && streamH) {
+    devW = streamW
+    devH = streamH
+  } else if (el instanceof HTMLImageElement) {
+    devW = el.naturalWidth || 1080
+    devH = el.naturalHeight || 1920
+  } else if (el instanceof HTMLCanvasElement) {
+    devW = el.width || 1080
+    devH = el.height || 1920
+  } else {
+    const nested = el.querySelector('canvas')
+    if (nested) {
+      devW = nested.width || 1080
+      devH = nested.height || 1920
+    }
+  }
+  const nx = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+  const ny = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height))
+  return { x: Math.round(nx * devW), y: Math.round(ny * devH) }
+}
+
 interface DeviceScreenProps {
   deviceId: number
   serial: string | null
   isRunning: boolean
-  sendMessage: (msg: object) => void
-  isConnected: boolean
+  sendControl: (msg: object) => void
+  controlConnected: boolean
+  jpegConnected: boolean
   liveScreenshot: LiveScreenshotFrame | null
+  /** تحذير من WebSocket عند فقدان الجهاز في ADB أثناء البث */
+  adbUnavailable?: string | null
+  screenStreamMode: 'jpeg' | 'h264'
+  onScreenStreamModeChange: (m: 'jpeg' | 'h264') => void
+  h264CanvasRef: RefObject<HTMLCanvasElement>
+  h264StreamWidth: number | null
+  h264StreamHeight: number | null
+  h264Error: string | null
+  h264Status: H264StreamStatus
 }
 
 export default function DeviceScreen({
   deviceId,
   serial,
   isRunning,
-  sendMessage,
-  isConnected,
+  sendControl,
+  controlConnected,
+  jpegConnected,
   liveScreenshot,
+  adbUnavailable = null,
+  screenStreamMode,
+  onScreenStreamModeChange,
+  h264CanvasRef,
+  h264StreamWidth,
+  h264StreamHeight,
+  h264Error,
+  h264Status,
 }: DeviceScreenProps) {
   const [staticUrl, setStaticUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -70,11 +130,13 @@ export default function DeviceScreen({
   const [liveBlobUrl, setLiveBlobUrl] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
-  const [mode, setMode] = useState<'tap' | 'swipe'>('tap')
+  const [mode, setMode] = useState<'tap' | 'swipe' | 'auto'>('auto')
   const [displayScale, setDisplayScale] = useState(100)
   const [textDraft, setTextDraft] = useState('')
   const [fullscreenActive, setFullscreenActive] = useState(false)
   const imgRef = useRef<HTMLImageElement>(null)
+  /** طبقة لمس فوق canvas في وضع H.264 (بعض المتصفحات تُخفق في تسليم PointerEvent للـ canvas) */
+  const h264TouchLayerRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const liveCapUrlRef = useRef<string | null>(null)
   const liveShotRef = useRef<LiveScreenshotFrame | null>(null)
@@ -93,10 +155,10 @@ export default function DeviceScreen({
   const lastClientRef = useRef({ clientX: 0, clientY: 0 })
   const endGestureRef = useRef<(cx: number, cy: number, pointerId: number) => void>(() => {})
 
-  const sendMessageRef = useRef(sendMessage)
-  sendMessageRef.current = sendMessage
-  const isConnectedRef = useRef(isConnected)
-  isConnectedRef.current = isConnected
+  const sendMessageRef = useRef(sendControl)
+  sendMessageRef.current = sendControl
+  const isConnectedRef = useRef(controlConnected)
+  isConnectedRef.current = controlConnected
   const isRunningRef = useRef(isRunning)
   isRunningRef.current = isRunning
 
@@ -107,7 +169,7 @@ export default function DeviceScreen({
   }, [])
 
   const fetchStatic = useCallback(async () => {
-    if (!isRunning || !serial) return
+    if (!isRunning || !serial || screenStreamMode === 'h264') return
     setLoading(true)
     setError(null)
     try {
@@ -117,32 +179,39 @@ export default function DeviceScreen({
         if (old) URL.revokeObjectURL(old)
         return url
       })
-    } catch {
-      setError('تعذر التقاط الشاشة')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر التقاط الشاشة')
     } finally {
       setLoading(false)
     }
-  }, [deviceId, isRunning, serial])
+  }, [deviceId, isRunning, serial, screenStreamMode])
 
   useEffect(() => {
-    if (isRunning) fetchStatic()
-  }, [isRunning, fetchStatic])
+    if (isRunning && screenStreamMode === 'jpeg') fetchStatic()
+  }, [isRunning, screenStreamMode, fetchStatic])
 
   useEffect(() => {
-    if (!isRunning || !isConnected) return
+    if (!isRunning || !jpegConnected || screenStreamMode !== 'jpeg') return
     if (liveMirror) {
-      sendMessage({
+      sendControl({
         action: 'subscribe_screenshots',
         interval_ms: intervalMs,
         stream_mode: 'jpeg',
       })
     } else {
-      sendMessage({ action: 'unsubscribe_screenshots' })
+      sendControl({ action: 'unsubscribe_screenshots' })
     }
     return () => {
-      sendMessage({ action: 'unsubscribe_screenshots' })
+      sendControl({ action: 'unsubscribe_screenshots' })
     }
-  }, [isRunning, isConnected, liveMirror, intervalMs, sendMessage])
+  }, [
+    isRunning,
+    jpegConnected,
+    screenStreamMode,
+    liveMirror,
+    intervalMs,
+    sendControl,
+  ])
 
   useEffect(() => {
     if (!liveMirror || !liveScreenshot?.dataBase64) {
@@ -209,19 +278,46 @@ export default function DeviceScreen({
 
   const displaySrc = liveMirror && liveBlobUrl ? liveBlobUrl : staticUrl
 
+  function getSurfaceEl(): HTMLElement | null {
+    if (screenStreamMode === 'h264') return h264TouchLayerRef.current
+    return imgRef.current
+  }
+
   function getRelativeCoords(clientX: number, clientY: number): { x: number; y: number } {
-    const el = imgRef.current
+    const el = getSurfaceEl()
     if (!el) return { x: 0, y: 0 }
-    return clientToDevicePixel(el, liveShotRef.current, clientX, clientY)
+    if (screenStreamMode === 'jpeg' && el instanceof HTMLImageElement) {
+      return clientToDevicePixel(el, liveShotRef.current, clientX, clientY)
+    }
+    return clientToDeviceSurface(
+      el,
+      liveShotRef.current,
+      h264StreamWidth,
+      h264StreamHeight,
+      screenStreamMode,
+      clientX,
+      clientY
+    )
   }
 
   function flushDragSegment(): boolean {
     if (!isConnectedRef.current || !isRunningRef.current) return false
     const p = pendingPointerRef.current
     if (!p) return false
-    const el = imgRef.current
+    const el = getSurfaceEl()
     if (!el) return false
-    const cur = clientToDevicePixel(el, liveShotRef.current, p.clientX, p.clientY)
+    const cur =
+      screenStreamMode === 'jpeg' && el instanceof HTMLImageElement
+        ? clientToDevicePixel(el, liveShotRef.current, p.clientX, p.clientY)
+        : clientToDeviceSurface(
+            el,
+            liveShotRef.current,
+            h264StreamWidth,
+            h264StreamHeight,
+            screenStreamMode,
+            p.clientX,
+            p.clientY
+          )
     const last = lastEmittedRef.current
     const dx = cur.x - last.x
     const dy = cur.y - last.y
@@ -249,9 +345,10 @@ export default function DeviceScreen({
   }
 
   /** pointerrawupdate غير مُعرَّف في أنواع React لـ <img> — نربطه يدوياً لعيّنة أدق على قلم/لمس. */
-  useEffect(() => {
-    const img = imgRef.current
-    if (!img) return
+  useLayoutEffect(() => {
+    const el =
+      screenStreamMode === 'h264' ? h264TouchLayerRef.current : imgRef.current
+    if (!el) return
     const onRaw = (ev: Event) => {
       if (!(ev instanceof PointerEvent)) return
       if (!pointerSessionRef.current) return
@@ -266,12 +363,18 @@ export default function DeviceScreen({
       }
       tryEmitDragSegmentThrottled()
     }
-    img.addEventListener('pointerrawupdate', onRaw)
-    return () => img.removeEventListener('pointerrawupdate', onRaw)
-  }, [displaySrc])
+    el.addEventListener('pointerrawupdate', onRaw)
+    return () => el.removeEventListener('pointerrawupdate', onRaw)
+  }, [
+    displaySrc,
+    screenStreamMode,
+    h264StreamWidth,
+    h264StreamHeight,
+    h264Status,
+  ])
 
-  function onPointerDown(e: React.PointerEvent<HTMLImageElement>) {
-    if (!isConnected || !isRunning) return
+  function onPointerDown(e: React.PointerEvent<HTMLElement>) {
+    if (!controlConnected || !isRunning) return
     e.preventDefault()
     pointerSessionRef.current = true
     activePointerIdRef.current = e.pointerId
@@ -288,8 +391,8 @@ export default function DeviceScreen({
     setIsDragging(false)
   }
 
-  function onPointerMove(e: React.PointerEvent<HTMLImageElement>) {
-    if (!isConnected || !isRunning) return
+  function onPointerMove(e: React.PointerEvent<HTMLElement>) {
+    if (!controlConnected || !isRunning) return
     if (e.pointerId !== activePointerIdRef.current) return
     // أثناء اللمس قد يكون buttons=0 في WebKit رغم استمرار الإصبع — نعتمد pointer capture + pointerId
     if (e.pointerType === 'mouse' && (e.buttons & 1) === 0) return
@@ -305,10 +408,10 @@ export default function DeviceScreen({
     if (pointerId !== activePointerIdRef.current) return
     pointerSessionRef.current = false
     activePointerIdRef.current = null
-    const img = imgRef.current
-    if (img?.releasePointerCapture) {
+    const surf = getSurfaceEl()
+    if (surf?.releasePointerCapture) {
       try {
-        img.releasePointerCapture(pointerId)
+        surf.releasePointerCapture(pointerId)
       } catch {
         /* قد يُطلق تلقائياً */
       }
@@ -326,8 +429,15 @@ export default function DeviceScreen({
     pendingPointerRef.current = null
 
     const end = getRelativeCoords(clientX, clientY)
+    const start = dragStartRef.current
+    const moveSq =
+      (end.x - start.x) * (end.x - start.x) + (end.y - start.y) * (end.y - start.y)
+    const autoAsTap =
+      modeRef.current === 'auto' &&
+      segmentsSentRef.current === 0 &&
+      moveSq <= AUTO_TAP_MAX_MOVE_SQ
 
-    if (modeRef.current === 'tap' && !dragged) {
+    if (autoAsTap || (modeRef.current === 'tap' && !dragged)) {
       sendMessageRef.current({ action: 'tap', x: end.x, y: end.y })
     } else if (segmentsSentRef.current > 0) {
       const last = lastEmittedRef.current
@@ -343,8 +453,7 @@ export default function DeviceScreen({
           duration_ms: DRAG_FINAL_SEGMENT_DURATION_MS,
         })
       }
-    } else if (modeRef.current === 'swipe' || dragged) {
-      const start = dragStartRef.current
+    } else if (modeRef.current === 'swipe' || dragged || modeRef.current === 'auto') {
       sendMessageRef.current({
         action: 'swipe',
         x1: start.x,
@@ -358,30 +467,30 @@ export default function DeviceScreen({
 
   endGestureRef.current = finalizeAtClient
 
-  function finalizePointer(e: React.PointerEvent<HTMLImageElement>) {
+  function finalizePointer(e: React.PointerEvent<HTMLElement>) {
     finalizeAtClient(e.clientX, e.clientY, e.pointerId)
   }
 
-  function onPointerUp(e: React.PointerEvent<HTMLImageElement>) {
+  function onPointerUp(e: React.PointerEvent<HTMLElement>) {
     finalizePointer(e)
   }
 
-  function onPointerCancel(e: React.PointerEvent<HTMLImageElement>) {
+  function onPointerCancel(e: React.PointerEvent<HTMLElement>) {
     finalizePointer(e)
   }
 
-  function onLostPointerCapture(e: React.PointerEvent<HTMLImageElement>) {
+  function onLostPointerCapture(e: React.PointerEvent<HTMLElement>) {
     if (!pointerSessionRef.current) return
     finalizePointer(e)
   }
 
   function sendKeyEvent(key: string) {
-    sendMessage({ action: 'keyevent', key })
+    sendControl({ action: 'keyevent', key })
   }
 
   function sendTypedText() {
     if (!textDraft.trim()) return
-    sendMessage({ action: 'input_text', text: textDraft })
+    sendControl({ action: 'input_text', text: textDraft })
     setTextDraft('')
   }
 
@@ -398,17 +507,50 @@ export default function DeviceScreen({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2 gap-y-3">
+        <div className="flex items-center gap-1 bg-gray-800/80 rounded-lg p-1 border border-gray-700">
+          <button
+            type="button"
+            onClick={() => onScreenStreamModeChange('h264')}
+            disabled={!isRunning || typeof VideoDecoder === 'undefined'}
+            className={clsx(
+              'px-2 py-1 rounded text-xs font-medium',
+              screenStreamMode === 'h264'
+                ? 'bg-emerald-600 text-white'
+                : 'text-gray-400 hover:text-gray-200'
+            )}
+          >
+            H.264
+          </button>
+          <button
+            type="button"
+            onClick={() => onScreenStreamModeChange('jpeg')}
+            disabled={!isRunning}
+            className={clsx(
+              'px-2 py-1 rounded text-xs font-medium',
+              screenStreamMode === 'jpeg'
+                ? 'bg-emerald-600 text-white'
+                : 'text-gray-400 hover:text-gray-200'
+            )}
+          >
+            JPEG
+          </button>
+        </div>
+
         <button
           type="button"
           onClick={() => setLiveMirror((v) => !v)}
-          disabled={!isRunning || !isConnected}
+          disabled={!isRunning || !jpegConnected || screenStreamMode === 'h264'}
           className={clsx(
             'btn-sm flex items-center gap-1.5',
             liveMirror ? 'btn-primary' : 'btn-secondary'
           )}
         >
           <Radio className="w-3.5 h-3.5" />
-          {liveMirror ? 'بث مباشر' : 'بث متوقف'}
+          {screenStreamMode === 'h264'
+            ? 'بث H.264'
+            : liveMirror
+              ? 'بث مباشر'
+              : 'بث متوقف'}
         </button>
 
         <div className="flex items-center gap-1.5 flex-wrap">
@@ -418,7 +560,12 @@ export default function DeviceScreen({
             <button
               key={p.ms}
               type="button"
-              disabled={!isRunning || !isConnected || !liveMirror}
+              disabled={
+                !isRunning ||
+                !jpegConnected ||
+                !liveMirror ||
+                screenStreamMode === 'h264'
+              }
               onClick={() => setIntervalMs(p.ms)}
               className={clsx(
                 'px-2 py-1 rounded text-xs font-medium transition-colors',
@@ -490,6 +637,17 @@ export default function DeviceScreen({
           >
             <Hand className="w-3.5 h-3.5" /> سحب
           </button>
+          <button
+            type="button"
+            onClick={() => setMode('auto')}
+            title="لمسة قصيرة = نقرة؛ حركة أوضح = سحب"
+            className={clsx(
+              'flex items-center gap-1 px-2 py-1 rounded text-xs font-medium',
+              mode === 'auto' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'
+            )}
+          >
+            <Sparkles className="w-3.5 h-3.5" /> تلقائي
+          </button>
         </div>
 
         <div className="flex gap-1 ml-auto flex-wrap justify-end">
@@ -504,7 +662,7 @@ export default function DeviceScreen({
               type="button"
               title={btn.title}
               onClick={() => sendKeyEvent(btn.key)}
-              disabled={!isRunning || !isConnected}
+              disabled={!isRunning || !controlConnected}
               className="btn-secondary btn-sm w-9 justify-center text-base"
             >
               {btn.label}
@@ -522,7 +680,7 @@ export default function DeviceScreen({
             className="input pl-9 text-sm"
             placeholder="نص إلى الجهاز (حقل نشط على الشاشة)"
             value={textDraft}
-            disabled={!isRunning || !isConnected}
+            disabled={!isRunning || !controlConnected}
             onChange={(e) => setTextDraft(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && sendTypedText()}
           />
@@ -530,7 +688,7 @@ export default function DeviceScreen({
         <button
           type="button"
           onClick={sendTypedText}
-          disabled={!isRunning || !isConnected || !textDraft.trim()}
+          disabled={!isRunning || !controlConnected || !textDraft.trim()}
           className="btn-primary btn-sm"
         >
           إرسال نص
@@ -546,17 +704,74 @@ export default function DeviceScreen({
           minHeight: 'min(85vh, 900px)',
         }}
       >
+        {adbUnavailable && screenStreamMode === 'jpeg' ? (
+          <div className="absolute top-0 left-0 right-0 z-20 px-3 py-2 bg-amber-950/95 text-amber-100 text-xs text-center border-b border-amber-800/60">
+            {adbUnavailable}
+          </div>
+        ) : null}
         {!isRunning ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 min-h-[320px]">
             <p>الجهاز متوقف — اضغط Start للتحكم</p>
           </div>
-        ) : loading && !displaySrc ? (
+        ) : loading && !displaySrc && screenStreamMode === 'jpeg' ? (
           <div className="absolute inset-0 flex items-center justify-center min-h-[320px]">
             <Loader2 className="w-10 h-10 animate-spin text-blue-400" />
           </div>
-        ) : error && !displaySrc ? (
+        ) : error && !displaySrc && screenStreamMode === 'jpeg' ? (
           <div className="absolute inset-0 flex items-center justify-center text-gray-500 min-h-[320px]">
             {error}
+          </div>
+        ) : isRunning && screenStreamMode === 'h264' ? (
+          <div
+            className="relative flex flex-col items-center justify-center w-full h-full p-2 sm:p-4 gap-2"
+            style={{
+              minHeight: 'min(85vh, 880px)',
+            }}
+          >
+            {h264Error ? (
+              <p className="text-amber-400 text-sm text-center px-4 z-10">{h264Error}</p>
+            ) : null}
+            <div
+              style={{
+                transform: `scale(${displayScale / 100})`,
+                transformOrigin: 'center center',
+                maxWidth: '100%',
+                maxHeight: '100%',
+              }}
+            >
+              <div
+                ref={h264TouchLayerRef}
+                className="relative z-[1] inline-block cursor-crosshair select-none touch-none"
+                style={{
+                  touchAction: 'none',
+                  WebkitTouchCallout: 'none' as const,
+                }}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerCancel}
+                onLostPointerCapture={onLostPointerCapture}
+              >
+                <canvas
+                  ref={h264CanvasRef}
+                  className="max-w-none max-h-[82vh] w-auto h-auto block bg-black min-w-[200px] min-h-[360px] pointer-events-none"
+                  style={{ imageRendering: 'auto' }}
+                />
+              </div>
+            </div>
+            {(h264Status === 'connecting' ||
+              (h264Status === 'connected' && !h264StreamWidth)) &&
+            !h264Error ? (
+              <div
+                className="absolute inset-0 z-[2] flex flex-col items-center justify-center gap-2 bg-black/40"
+                style={{ pointerEvents: 'none' }}
+              >
+                <Loader2 className="w-10 h-10 animate-spin text-blue-400" />
+                <p className="text-xs text-gray-400 px-4 text-center">
+                  جاري استقبال بث H.264 من الخادم…
+                </p>
+              </div>
+            ) : null}
           </div>
         ) : displaySrc ? (
           <div
@@ -597,10 +812,14 @@ export default function DeviceScreen({
         )}
       </div>
 
-      {isConnected && isRunning && (
+      {controlConnected && isRunning && (
         <p className="text-center text-xs text-gray-500 leading-relaxed">
-          بث WebSocket • سحب: دمج مقاطع على الخادم + إنهاء من النافذة عند الحاجة • JPEG + Blob URL
-          {liveMirror && !liveScreenshot && ' — في انتظار أول إطار…'}
+          {screenStreamMode === 'h264'
+            ? 'بث WebSocket ثنائي الاتجاه: H.264 (screenrecord) + WebCodecs — سحب يُدمج على الخادم'
+            : 'بث WebSocket • سحب: دمج مقاطع على الخادم • JPEG + Blob URL'}
+          {screenStreamMode === 'jpeg' && liveMirror && !liveScreenshot?.dataBase64
+            ? ' — في انتظار أول إطار…'
+            : ''}
         </p>
       )}
     </div>

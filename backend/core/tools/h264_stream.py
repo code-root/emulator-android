@@ -15,6 +15,7 @@ Latency target: < 100 ms  (vs 200-600 ms with PNG screencap)
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import struct
 from typing import AsyncIterator, Dict, Any, Optional, Tuple, List
@@ -110,6 +111,45 @@ def _parse_buffer(buf: bytes) -> Tuple[List[Tuple[int, bytes]], bytes]:
     return units, leftover
 
 
+def _flush_incomplete_annex_b(buf: bytes) -> List[Tuple[int, bytes]]:
+    """
+    When the encoder stream ends, the last NAL may sit in `buf` with only one start code
+    (normal _parse_buffer waits for a *next* start code).  Treat EOF as end of that NAL.
+    """
+    if not buf:
+        return []
+    positions: List[Tuple[int, int]] = []
+    i = 0
+    end = len(buf)
+    while i < end:
+        if i + 4 <= end and buf[i : i + 4] == _SC4:
+            positions.append((i, 4))
+            i += 4
+            continue
+        if i + 3 <= end and buf[i : i + 3] == _SC3:
+            if not positions or positions[-1][0] + positions[-1][1] != i:
+                positions.append((i, 3))
+                i += 3
+                continue
+        i += 1
+    if not positions:
+        return []
+    out: List[Tuple[int, bytes]] = []
+    for idx in range(len(positions) - 1):
+        pos, sc_len = positions[idx]
+        next_pos = positions[idx + 1][0]
+        raw = buf[pos:next_pos]
+        payload = raw[sc_len:]
+        if payload:
+            out.append((_nal_type(payload[0]), raw))
+    pos, sc_len = positions[-1]
+    raw = buf[pos:]
+    payload = raw[sc_len:]
+    if payload:
+        out.append((_nal_type(payload[0]), raw))
+    return out
+
+
 def _extract_codec(sps_raw: bytes) -> str:
     """Derive avc1.PPCCLL codec string from raw SPS NAL (includes start code)."""
     try:
@@ -186,6 +226,25 @@ class H264Streamer:
             stderr=asyncio.subprocess.PIPE,
         )
 
+        async def _drain_stderr() -> None:
+            """Unbounded stderr fills the pipe and blocks screenrecord forever."""
+            if proc.stderr is None:
+                return
+            try:
+                while True:
+                    block = await proc.stderr.read(8192)
+                    if not block:
+                        break
+                    txt = block.decode(errors="replace").strip()
+                    if txt:
+                        logger.warning("H264 screenrecord stderr (%s): %s", serial, txt[:800])
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("H264 stderr drain: %s", exc)
+
+        stderr_task = asyncio.create_task(_drain_stderr())
+
         sps_raw:    Optional[bytes] = None
         pps_raw:    Optional[bytes] = None
         codec_str:  str = "avc1.640028"
@@ -203,10 +262,36 @@ class H264Streamer:
                     )
                 except asyncio.TimeoutError:
                     logger.info("H264: read timeout for %s", serial)
+                    for nal_t, nal_raw in _flush_incomplete_annex_b(buf):
+                        if nal_t == NAL_SPS:
+                            sps_raw = nal_raw
+                            codec_str = _extract_codec(nal_raw)
+                            config_sent = False
+                        elif nal_t == NAL_PPS:
+                            pps_raw = nal_raw
+                            if sps_raw and pps_raw and not config_sent:
+                                yield pack_config(codec_str, width, height, sps_raw + pps_raw)
+                                config_sent = True
+                        elif nal_t in (NAL_IDR, NAL_NON_IDR, NAL_PART_A):
+                            pts += frame_us
+                            yield pack_frame(nal_t == NAL_IDR, pts, nal_raw)
                     break
 
                 if not chunk:
                     logger.info("H264: EOF for %s", serial)
+                    for nal_t, nal_raw in _flush_incomplete_annex_b(buf):
+                        if nal_t == NAL_SPS:
+                            sps_raw = nal_raw
+                            codec_str = _extract_codec(nal_raw)
+                            config_sent = False
+                        elif nal_t == NAL_PPS:
+                            pps_raw = nal_raw
+                            if sps_raw and pps_raw and not config_sent:
+                                yield pack_config(codec_str, width, height, sps_raw + pps_raw)
+                                config_sent = True
+                        elif nal_t in (NAL_IDR, NAL_NON_IDR, NAL_PART_A):
+                            pts += frame_us
+                            yield pack_frame(nal_t == NAL_IDR, pts, nal_raw)
                     break
 
                 buf += chunk
@@ -231,6 +316,9 @@ class H264Streamer:
                     # skip AUD / SEI / end-of-sequence NALs
 
         finally:
+            stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stderr_task
             if proc.returncode is None:
                 proc.terminate()
                 try:

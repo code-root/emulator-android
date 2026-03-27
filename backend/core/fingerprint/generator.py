@@ -1,6 +1,8 @@
 import random
 import string
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+
+from core.fingerprint.extended_defaults import merge_extended, empty_extended
 
 # Preset عند إنشاء جهاز: يضبط api_level + البصمة (مثل Samsung حقيقي)
 DEVICE_CREATION_PRESETS: Dict[str, Dict[str, Any]] = {
@@ -361,7 +363,97 @@ class FingerprintGenerator:
         ):
             if profile.get(_k) is not None:
                 out[_k] = profile[_k]
+
+        out["extended"] = self._build_extended(profile, out, region)
         return out
+
+    def _build_extended(
+        self,
+        profile: Dict[str, Any],
+        flat: Dict[str, Any],
+        region: str,
+    ) -> Dict[str, Any]:
+        """حقول JSON موسّعة متناسقة مع الملف الشخصي."""
+        sec = profile.get("security_patch") or "2024-01-01"
+        inc = flat.get("ap_version") or "release-keys"
+        if "/" in str(flat.get("build_fingerprint", "")):
+            parts = str(flat["build_fingerprint"]).split("/")
+            build_id_guess = parts[3] if len(parts) > 3 else None
+        else:
+            build_id_guess = None
+
+        mcc_mnc = self._region_plmn(region)
+        carrier = mcc_mnc[2]
+
+        ext = merge_extended(
+            empty_extended(),
+            {
+                "device": {
+                    "product_name": profile.get("device_codename"),
+                    "bootloader": inc if isinstance(inc, str) else None,
+                },
+                "system": {
+                    "build_id": build_id_guess,
+                    "security_patch": sec,
+                },
+                "identifiers": {
+                    "imei_slot2": self._random_imei(
+                        tac_prefix=(
+                            "35916205"
+                            if str(profile.get("manufacturer", "")).lower() == "samsung"
+                            else None
+                        )
+                    ),
+                    "imsi": "".join(str(random.randint(0, 9)) for _ in range(15)),
+                    "meid": "".join(str(random.randint(0, 9)) for _ in range(14)),
+                },
+                "network": {
+                    "wifi_mac": flat.get("mac_address"),
+                    "bluetooth_mac": self._random_mac(),
+                    "carrier_name": carrier,
+                    "mcc": mcc_mnc[0],
+                    "mnc": mcc_mnc[1],
+                },
+                "sim": {
+                    "iccid": "89" + "".join(str(random.randint(0, 9)) for _ in range(17)),
+                    "operator": carrier,
+                    "country_iso": flat.get("country"),
+                },
+                "battery": {
+                    "level_percent": random.randint(35, 96),
+                    "status": random.choice(["discharging", "charging", "full"]),
+                    "temp_c": round(random.uniform(28.0, 39.0), 1),
+                    "voltage_mv": random.randint(3600, 4200),
+                },
+                "location": {
+                    "accuracy_m": round(random.uniform(4.0, 25.0), 1),
+                    "speed_m_s": round(random.uniform(0.0, 8.0), 2),
+                },
+                "meta": {"profile_key": profile.get("device_model")},
+            },
+        )
+        return ext
+
+    def _region_plmn(self, region: str) -> tuple:
+        """(mcc, mnc_int, carrier_name) تقريبي."""
+        plmns: List[tuple] = [
+            (310, 260, "T-Mobile US"),
+            (310, 410, "AT&T"),
+            (311, 480, "Verizon"),
+            (234, 15, "vodafone UK"),
+            (208, 1, "Orange FR"),
+            (262, 1, "T-Mobile DE"),
+            (450, 5, "SK Telecom"),
+            (460, 0, "China Mobile"),
+            (404, 10, "Airtel India"),
+        ]
+        if region == "us":
+            return random.choice(plmns[:3])
+        if region == "eu":
+            return random.choice(plmns[3:6])
+        if region == "asia":
+            return random.choice(plmns[6:])
+        return random.choice(plmns)
 
     def _random_imei(self, tac_prefix: Optional[str] = None) -> str:
         """Generate a valid IMEI using Luhn algorithm."""
@@ -425,13 +517,17 @@ class FingerprintGenerator:
         )[0]
 
     def _random_private_ip(self) -> str:
-        """Generate a random private IP address."""
-        prefix = random.choice([
-            f"192.168.{random.randint(0, 255)}",
-            f"10.{random.randint(0, 255)}.{random.randint(0, 255)}",
-            f"172.{random.randint(16, 31)}.{random.randint(0, 255)}",
-        ])
-        return f"{prefix}.{random.randint(2, 254)}"
+        """Generate a random private IP address (يتجنب 10.0.2.x الشائع في محاكي أندرويد)."""
+        for _ in range(12):
+            prefix = random.choice([
+                f"192.168.{random.randint(0, 255)}",
+                f"10.{random.randint(0, 255)}.{random.randint(0, 255)}",
+                f"172.{random.randint(16, 31)}.{random.randint(0, 255)}",
+            ])
+            if prefix.startswith("10.0.2."):
+                continue
+            return f"{prefix}.{random.randint(2, 254)}"
+        return f"192.168.{random.randint(0, 255)}.{random.randint(2, 254)}"
 
     def _random_locale(self, region: str) -> tuple:
         """Return (language, country) pair for a region."""

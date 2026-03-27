@@ -15,6 +15,23 @@ def is_samsung_fingerprint(fp: Dict[str, Any]) -> bool:
     return m == "samsung" or b == "samsung"
 
 
+def samsung_apply_user_notes(is_samsung: bool) -> tuple[Optional[str], Optional[str]]:
+    """
+    نصوص لاستجابة تطبيق البصمة: توضيح أن رفض جزء من setprop على AVD متوقع وليس فشلاً.
+    يعيد (note_قصيرة, detail_أطول).
+    """
+    if not is_samsung:
+        return None, None
+    return (
+        "على محاكي Google AVD يُرفض غالباً نصف خصائص Samsung الإضافية أو أكثر — سلوك متوقع، ليس عطلاً.",
+        (
+            "صورة النظام هي AOSP / Google APIs وليست روم One UI؛ طبقات vendor/samsung الحقيقية غير موجودة، "
+            "فلا يمكن للنظام قبول كل مفتاح. ما نجح يحدّث البصمة وحقول Build ويكفي لكثير من التطبيقات. "
+            "قائمة الرفض: report.failed. لتمويه أعمق: Frida أو جهاز فعلي."
+        ),
+    )
+
+
 def infer_sales_code_from_csc(csc_version: Optional[str]) -> str:
     """
     من سلسلة مثل G996BOXMJHZC2 يُستخرج غالباً كود CSC ثلاثي (مثل OXM).
@@ -109,6 +126,7 @@ def build_extended_samsung_prop_map(fp: Dict[str, Any]) -> Dict[str, str]:
         add("ro.product.cpu.abilist64", "arm64-v8a")
         add("ro.vendor.product.cpu.abilist", abilist)
 
+    add("ro.kernel.qemu", "0")
     add("ro.hardware", hw)
     add("ro.soc.model", soc)
     add("ro.soc.manufacturer", soc_m)

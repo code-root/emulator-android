@@ -97,6 +97,20 @@ export interface DeviceCreateForm {
   api_level: number
   arch: string
   preset?: string | null
+  /** اسم ملف ZIP أو مجلد Odin تحت firmware/ (مثل G996BXXSJHZA6_G996BOXMJHZA6_XSG) */
+  firmware_package?: string | null
+}
+
+export interface FirmwarePackageMeta {
+  filename: string
+  kind: 'file' | 'directory'
+  source?: string
+  device_model?: string
+  sales_code?: string
+  ap_version?: string
+  csc_version?: string
+  suggested_presets?: string[]
+  absolute_path?: string
 }
 
 export interface DevicePresetMeta {
@@ -147,7 +161,15 @@ export interface DeviceProfileMeta {
 }
 
 export interface WSMessage {
-  type: 'status' | 'screenshot' | 'heartbeat' | 'ping' | 'pong' | 'ack' | 'error'
+  type:
+    | 'status'
+    | 'screenshot'
+    | 'heartbeat'
+    | 'ping'
+    | 'pong'
+    | 'ack'
+    | 'error'
+    | 'adb_unavailable'
   status?: DeviceStatus
   device_id?: number
   adb_serial?: string

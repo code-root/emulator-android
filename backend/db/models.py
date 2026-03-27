@@ -110,10 +110,34 @@ class DeviceFingerprint(Base):
     # Samsung / Odin-style build labels (spoofed via setprop where permitted)
     ap_version = Column(String(64), nullable=True)
     csc_version = Column(String(64), nullable=True)
+    # JSON: حقول إضافية (SIM2، حساسات، بطارية، build_id، MCC/MNC، …) — انظر core/fingerprint/extended_defaults.py
+    extended_json = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     device = relationship("Device", back_populates="fingerprint")
+    revisions = relationship(
+        "FingerprintRevision",
+        back_populates="fingerprint_row",
+        cascade="all, delete-orphan",
+    )
+
+
+class FingerprintRevision(Base):
+    """نسخة محفوظة من البصمة بعد كل توليد/تعديل/تطبيق مهم."""
+
+    __tablename__ = "fingerprint_revisions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False, index=True)
+    fingerprint_id = Column(Integer, ForeignKey("device_fingerprints.id"), nullable=True, index=True)
+    version = Column(Integer, nullable=False, default=1)
+    label = Column(String(256), nullable=True)
+    snapshot_json = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    device = relationship("Device")
+    fingerprint_row = relationship("DeviceFingerprint", back_populates="revisions")
 
 
 class ProxyConfig(Base):

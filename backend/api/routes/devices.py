@@ -268,7 +268,18 @@ async def _create_avd_background(device_id: int, avd_name: str, api_level: int, 
     async with AsyncSessionLocal() as db:
         try:
             avd = emulator_manager.avd_backend
-            success = await avd.create_avd(avd_name, api_level=api_level, arch=arch)
+            fp_row = await db.execute(
+                select(DeviceFingerprint).where(DeviceFingerprint.device_id == device_id)
+            )
+            fp = fp_row.scalar_one_or_none()
+            success = await avd.create_avd(
+                avd_name,
+                api_level=api_level,
+                arch=arch,
+                manufacturer=fp.manufacturer if fp else None,
+                brand=fp.brand if fp else None,
+                device_model=fp.device_model if fp else None,
+            )
             result = await db.execute(select(Device).where(Device.id == device_id))
             device = result.scalar_one_or_none()
             if device:
@@ -324,6 +335,7 @@ async def start_device(
         raise HTTPException(status_code=400, detail="Device is already running")
 
     device.status = DeviceStatus.booting
+    device.adb_serial = None
     await db.flush()
     await db.refresh(device)
     await ws_manager.broadcast(device_id, {"type": "status", "status": "booting", "device_id": device_id})
@@ -335,19 +347,28 @@ async def start_device(
 
 async def _start_device_background(device_id: int):
     from db.database import AsyncSessionLocal
+    from core.fingerprint.spoofer import FingerprintSpoofer
+    from core.fingerprint.merge import fingerprint_row_to_apply_dict
+    from core.fingerprint.samsung_enhanced import merge_profile_defaults_for_apply
+
     async with AsyncSessionLocal() as db:
         try:
             result = await db.execute(select(Device).where(Device.id == device_id))
             device = result.scalar_one_or_none()
             if not device:
                 return
+            owner_id = device.owner_id
             success, info = await emulator_manager.start(device)
+            adb_serial = None
+            console_port = None
             if success:
                 device.status = DeviceStatus.running
                 device.pid = info.get("pid")
                 device.adb_port = info.get("adb_port")
                 device.adb_serial = info.get("adb_serial")
                 device.console_port = info.get("console_port")
+                adb_serial = device.adb_serial
+                console_port = device.console_port
             else:
                 device.status = DeviceStatus.error
             await db.commit()
@@ -355,6 +376,47 @@ async def _start_device_background(device_id: int):
                 device_id,
                 {"type": "status", "status": device.status.value, "device_id": device_id, "adb_serial": device.adb_serial}
             )
+
+            # بعد الإقلاع: تطبيق البصمة + طبقة إخفاء المحاكي تلقائياً (يتطلب adb root كالمعتاد)
+            if success and adb_serial:
+                fp_row = await db.execute(
+                    select(DeviceFingerprint).where(DeviceFingerprint.device_id == device_id)
+                )
+                fp = fp_row.scalar_one_or_none()
+                if fp:
+                    try:
+                        raw = fingerprint_row_to_apply_dict(
+                            fp, {"console_port": console_port}
+                        )
+                        raw.pop("_extended_raw", None)
+                        merged = merge_profile_defaults_for_apply(raw)
+                        spoofer = FingerprintSpoofer()
+                        adb_tool = ADBTool()
+                        report = await spoofer.apply(adb_tool, adb_serial, merged)
+                        n_ok, n_fail = len(report.get("applied", [])), len(report.get("failed", []))
+                        await _log_operation(
+                            db,
+                            device_id,
+                            owner_id,
+                            "fingerprint_auto_apply",
+                            OperationStatus.success,
+                            f"applied={n_ok} failed={n_fail}",
+                        )
+                        await db.commit()
+                    except Exception as ex:
+                        logger.warning("fingerprint_auto_apply device=%s: %s", device_id, ex)
+                        try:
+                            await _log_operation(
+                                db,
+                                device_id,
+                                owner_id,
+                                "fingerprint_auto_apply",
+                                OperationStatus.failure,
+                                str(ex)[:500],
+                            )
+                            await db.commit()
+                        except Exception:
+                            pass
         except Exception as e:
             logger.error(f"Start device {device_id} failed: {e}")
             async with AsyncSessionLocal() as db2:
@@ -382,6 +444,7 @@ async def stop_device(
 
     device.status = DeviceStatus.stopped
     device.pid = None
+    device.adb_serial = None
     await db.flush()
     await db.refresh(device)
     await ws_manager.broadcast(device_id, {"type": "status", "status": "stopped", "device_id": device_id})
@@ -405,6 +468,7 @@ async def restart_device(
 
     device.status = DeviceStatus.booting
     device.pid = None
+    device.adb_serial = None
     await db.flush()
     await db.refresh(device)
     background_tasks.add_task(_start_device_background, device_id)
@@ -445,6 +509,12 @@ async def get_screenshot(
         png_bytes = await adb_tool.screenshot(device.adb_serial)
         return Response(content=png_bytes, media_type="image/png")
     except Exception as e:
+        err = str(e).lower()
+        if "not found" in err and ("device" in err or "adb:" in err):
+            raise HTTPException(
+                status_code=503,
+                detail="ADB device not connected — emulator may have stopped or serial is stale.",
+            )
         raise HTTPException(status_code=500, detail=f"Screenshot failed: {e}")
 
 

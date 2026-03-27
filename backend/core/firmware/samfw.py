@@ -118,6 +118,27 @@ def _patch_build_fingerprint(build_fp: str, new_build_id: str) -> str:
     )
 
 
+# مقطع المنتج في fingerprint (بين samsung و codename) — EEA الافتراضي في DEVICE_PROFILES هو o1sxeea.
+# لبعض أكواد المبيعات نستبدله بنمط أقرب لبناء غير EEA (راجع build.prop إن لزم التصحيح الدقيق).
+G996B_FINGERPRINT_PRODUCT_BY_SALES: dict[str, str] = {
+    "XSG": "o1sxxx",
+}
+
+
+def _patch_fingerprint_samsung_product(
+    build_fp: str, new_product: str, device_codename: str
+) -> str:
+    """يستبدل المقطع الثاني في samsung/<product>/<codename>:..."""
+    codename_esc = re.escape(device_codename.strip())
+    return re.sub(
+        rf"^(samsung)/([^/]+)/({codename_esc})(:)",
+        rf"\1/{new_product}/\3\4",
+        build_fp,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
 def merge_firmware_into_fingerprint(
     fp_data: Dict[str, Any],
     meta: Dict[str, Any],
@@ -138,8 +159,19 @@ def merge_firmware_into_fingerprint(
             out["csc_version"] = guessed
 
     bf = out.get("build_fingerprint")
-    if isinstance(bf, str) and ap and ":user/release-keys" in bf:
-        out["build_fingerprint"] = _patch_build_fingerprint(bf, ap)
+    if isinstance(bf, str) and ":user/release-keys" in bf:
+        codename = (out.get("device_codename") or "o1s").strip()
+        if (
+            str(model or "").upper() == "SM-G996B"
+            and sales
+            and bf.lower().startswith("samsung/")
+        ):
+            prod = G996B_FINGERPRINT_PRODUCT_BY_SALES.get(str(sales).upper())
+            if prod:
+                bf = _patch_fingerprint_samsung_product(bf, prod, codename)
+        if ap:
+            bf = _patch_build_fingerprint(bf, ap)
+        out["build_fingerprint"] = bf
 
     if meta.get("country"):
         out["country"] = meta["country"]

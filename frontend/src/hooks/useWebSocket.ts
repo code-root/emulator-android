@@ -8,6 +8,8 @@ interface UseWebSocketReturn {
   status: WSStatus
   lastMessage: WSMessage | null
   liveScreenshot: LiveScreenshotFrame | null
+  /** نص تحذير من الخادم عندما لا يظهر الجهاز في ADB أثناء بث JPEG */
+  adbUnavailable: string | null
   sendMessage: (msg: object) => void
   isConnected: boolean
   reconnect: () => void
@@ -16,17 +18,22 @@ interface UseWebSocketReturn {
 const MAX_BACKOFF_MS = 30_000
 const BASE_DELAY_MS = 1_000
 
-export function useWebSocket(deviceId: number | null): UseWebSocketReturn {
+export function useWebSocket(
+  deviceId: number | null,
+  options?: { enabled?: boolean }
+): UseWebSocketReturn {
+  const enabled = options?.enabled !== false
   const wsRef = useRef<WebSocket | null>(null)
   const [status, setStatus] = useState<WSStatus>('disconnected')
   const [lastMessage, setLastMessage] = useState<WSMessage | null>(null)
   const [liveScreenshot, setLiveScreenshot] = useState<LiveScreenshotFrame | null>(null)
+  const [adbUnavailable, setAdbUnavailable] = useState<string | null>(null)
   const reconnectAttemptRef = useRef(0)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
 
   const connect = useCallback(() => {
-    if (!deviceId || !mountedRef.current) return
+    if (!deviceId || !enabled || !mountedRef.current) return
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return
 
     const url = getWebSocketUrl(deviceId)
@@ -39,6 +46,7 @@ export function useWebSocket(deviceId: number | null): UseWebSocketReturn {
       if (!mountedRef.current) return
       setStatus('connected')
       setLiveScreenshot(null)
+      setAdbUnavailable(null)
       reconnectAttemptRef.current = 0
     }
 
@@ -47,7 +55,14 @@ export function useWebSocket(deviceId: number | null): UseWebSocketReturn {
       try {
         const msg: WSMessage = JSON.parse(event.data)
         setLastMessage(msg)
-        if (msg.type === 'screenshot' && msg.data) {
+        if (msg.type === 'adb_unavailable') {
+          setAdbUnavailable(
+            typeof msg.message === 'string' && msg.message.length
+              ? msg.message
+              : 'ADB غير متاح'
+          )
+        } else if (msg.type === 'screenshot' && msg.data) {
+          setAdbUnavailable(null)
           const w = typeof msg.width === 'number' ? msg.width : 1080
           const h = typeof msg.height === 'number' ? msg.height : 1920
           const dw =
@@ -91,7 +106,7 @@ export function useWebSocket(deviceId: number | null): UseWebSocketReturn {
         }
       }, delay)
     }
-  }, [deviceId])
+  }, [deviceId, enabled])
 
   const disconnect = useCallback(() => {
     if (reconnectTimerRef.current) {
@@ -99,11 +114,15 @@ export function useWebSocket(deviceId: number | null): UseWebSocketReturn {
       reconnectTimerRef.current = null
     }
     if (wsRef.current) {
-      wsRef.current.onclose = null  // prevent reconnect
-      wsRef.current.close()
+      const ws = wsRef.current
       wsRef.current = null
+      ws.onerror = null
+      ws.onmessage = null
+      ws.onclose = null
+      ws.close()
     }
     setStatus('disconnected')
+    setAdbUnavailable(null)
   }, [])
 
   const reconnect = useCallback(() => {
@@ -120,21 +139,26 @@ export function useWebSocket(deviceId: number | null): UseWebSocketReturn {
 
   useEffect(() => {
     mountedRef.current = true
-    if (deviceId) {
+    if (deviceId && enabled) {
       connect()
+    } else {
+      disconnect()
     }
     return () => {
       mountedRef.current = false
       disconnect()
     }
-  }, [deviceId, connect, disconnect])
+  }, [deviceId, enabled, connect, disconnect])
 
   return {
     status,
     lastMessage,
     liveScreenshot,
+    adbUnavailable,
     sendMessage,
     isConnected: status === 'connected',
     reconnect,
   }
 }
+
+export { useDeviceH264 } from './useDeviceH264'

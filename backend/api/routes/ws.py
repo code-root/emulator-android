@@ -26,6 +26,10 @@ SCREENSHOT_INTERVAL_MAX_MS = 2500
 SCREENSHOT_INTERVAL_DEFAULT_MS = 0
 
 SERIAL_CACHE_TTL_SEC = 120.0
+# عند فشل screencap (جهاز غير موجود في ADB): إبطاء المحاولات وتقليل الضجيج في السجلات.
+SCREENSHOT_FAIL_BACKOFF_MIN_SEC = 0.25
+SCREENSHOT_FAIL_BACKOFF_MAX_SEC = 5.0
+ADB_LOSS_NOTIFY_INTERVAL_SEC = 12.0
 # بعد التحكم: جدولة اللقطة التالية فوراً (0 = بدون تأخير إضافي).
 POST_CONTROL_FRAME_GAP_SEC = 0.0
 
@@ -91,6 +95,11 @@ def _png_dimensions(png_bytes: bytes) -> tuple[int, int]:
     except Exception:
         with Image.open(io.BytesIO(png_bytes)) as im:
             return im.width, im.height
+
+
+def _adb_serial_not_found(err: BaseException | str) -> bool:
+    s = str(err).lower()
+    return "not found" in s and ("device" in s or "adb:" in s)
 
 
 def _clamp_interval_ms(raw_ms) -> int:
@@ -206,6 +215,7 @@ async def websocket_endpoint(
         return None
 
     frame_state = {"next_at": time.monotonic()}
+    screenshot_state = {"fail_streak": 0, "last_notify_monotonic": 0.0}
 
     def bump_next_frame_after_input() -> None:
         adaptive_reset()
@@ -322,6 +332,7 @@ async def websocket_endpoint(
                         base_iv = session["interval_sec"]
                         try:
                             png_bytes = await adb_tool.screenshot(serial)
+                            screenshot_state["fail_streak"] = 0
                             t_after = time.monotonic()
                             sig = _frame_signature(png_bytes)
                             use_jpeg = session.get("stream_jpeg", True)
@@ -356,7 +367,38 @@ async def websocket_endpoint(
                             raise
                         except Exception as e:
                             logger.debug(f"Screenshot error for device {device_id}: {e}")
-                            frame_state["next_at"] = time.monotonic() + max(0.05, base_iv)
+                            await refresh_serial_cache(force=True)
+                            t_now = time.monotonic()
+                            if _adb_serial_not_found(e):
+                                session["serial"] = None
+                                session["serial_cached_at"] = 0.0
+                                screenshot_state["fail_streak"] = min(
+                                    screenshot_state["fail_streak"] + 1, 16
+                                )
+                                k = max(0, screenshot_state["fail_streak"] - 1)
+                                delay = min(
+                                    SCREENSHOT_FAIL_BACKOFF_MAX_SEC,
+                                    SCREENSHOT_FAIL_BACKOFF_MIN_SEC * (2**min(k, 6)),
+                                )
+                                if (
+                                    t_now - screenshot_state["last_notify_monotonic"]
+                                    >= ADB_LOSS_NOTIFY_INTERVAL_SEC
+                                ):
+                                    screenshot_state["last_notify_monotonic"] = t_now
+                                    try:
+                                        await websocket.send_json({
+                                            "type": "adb_unavailable",
+                                            "message": (
+                                                "الجهاز غير ظاهر في ADB — ربما أُغلق المحاكي أو انقطع الاتصال."
+                                            ),
+                                            "detail": str(e)[:400],
+                                        })
+                                    except Exception:
+                                        pass
+                                frame_state["next_at"] = t_now + max(delay, base_iv)
+                            else:
+                                screenshot_state["fail_streak"] = 0
+                                frame_state["next_at"] = t_now + max(0.05, base_iv)
                     else:
                         frame_state["next_at"] = time.monotonic() + session["interval_sec"]
                 else:

@@ -10,7 +10,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-Web-based **Android Virtual Device (AVD) farm**: create emulated devices, **unique fingerprints** per instance, start/stop, **live screen** over WebSocket (JPEG), **touch/drag** via ADB, **APK store**, HTTP/SOCKS proxy, **SAMFW** firmware alignment presets, REST API + OpenAPI/Swagger.
+Web-based **Android Virtual Device (AVD) farm**: create emulated devices, **unique fingerprints** per instance, start/stop, **live screen** over WebSocket (**JPEG and optional H.264**), **touch/drag** via ADB, **APK store**, HTTP/SOCKS proxy, **SAMFW / Odin folder** firmware alignment, **fingerprint hub API** with revisions, **AVD hardware profile sync** for Samsung vs Pixel, REST API + OpenAPI/Swagger.
 
 **Suggested GitHub “About” description:**  
 *Android AVD farm — FastAPI + React: live WebSocket mirror, ADB input, per-device fingerprint spoofing, APK store, proxy, Docker, SAMFW presets.*
@@ -26,6 +26,7 @@ Web-based **Android Virtual Device (AVD) farm**: create emulated devices, **uniq
 3. [Live stream & control flow](#live-stream--control-flow)
 4. [Device lifecycle](#device-lifecycle)
 5. [Features (current release)](#features-current-release)
+5a. [Recent updates (March 2026)](#recent-updates-march-2026)
 6. [Tech stack](#tech-stack)
 7. [Quick start](#quick-start)
 8. [REST API & WebSocket](#rest-api--websocket)
@@ -157,6 +158,58 @@ stateDiagram-v2
 | **Security** | JWT, user/admin roles, device ownership |
 | **Docker** | Compose stack with Postgres / Redis / Nginx |
 | **CI** | GitHub Actions: backend, frontend, compose validation |
+| **H.264 stream** | Optional low-latency screen path over WebSocket (where enabled) |
+| **Fingerprint hub** | `/api/fingerprint/*` — revisions, revert, compare, validate, extended JSON |
+| **Anti-emulator props** | Layered `setprop` + console + Frida script template; auto-apply after boot |
+
+---
+
+### Recent updates (March 2026)
+
+This release focuses on **Samsung-aligned fingerprints**, **clearer AVD hardware identity**, **firmware package discovery**, and **operator-facing APIs/UI**.
+
+#### Fingerprint system
+
+- **`/api/fingerprint/{device_id}`** (hub): unified REST for full fingerprint documents, optional **`extended`** JSON (extra SIM, sensors, battery, PLMN, etc.), **`revision_label`** on writes.
+- **Revisions**: table `fingerprint_revisions` — list, **revert** to a snapshot, **compare** current vs a revision.
+- **Apply & randomize** on the hub run **consistency checks** before apply (422 on hard failures).
+- **`GET /api/fingerprint/profiles/list`** — device profile silhouettes for editors.
+- **Merge path**: `fingerprint_row_to_apply_dict()` merges SQL columns + `extended_json` for the spoofer (legacy `/api/devices/.../fingerprint` uses the same merge).
+- **Samsung extended props**: large `ro.product` / `ro.vendor` / CSC map via [`backend/core/fingerprint/samsung_enhanced.py`](backend/core/fingerprint/samsung_enhanced.py); many keys **fail on AVD** (expected — image is AOSP, not One UI). Apply response includes **`note`** and **`detail`** explaining this.
+- **Auto-apply on boot**: after a device **starts** successfully, the server runs **fingerprint + anti-detect apply** once (same as manual “Apply”), logged as `fingerprint_auto_apply`.
+
+#### SAMFW / Odin firmware folder names
+
+- **Odin-style directory** names such as `G996BXXSJHZA6_G996BOXMJHZA6_XSG` under [`firmware/`](firmware/) are parsed in [`backend/core/firmware/samfw.py`](backend/core/firmware/samfw.py) (AP, CSC, sales code, locale hints).
+- **`merge_firmware_into_fingerprint`** updates `ap_version`, `csc_version`, build fingerprint PDA segment; **XSG** maps fingerprint **product** segment to **`o1sxxx`** (non-EEA style).
+- **Tests**: [`backend/tests/test_firmware_xsg.py`](backend/tests/test_firmware_xsg.py).
+- **Create device**: optional **`firmware_package`** (ZIP or folder basename) in API; **web UI** loads options from **`GET /api/meta/firmware-packages`**.
+
+#### AVD hardware (Android Studio “Properties”)
+
+- Samsung fingerprints: AVD is created with **`medium_phone`** (SDK has no Samsung device id) then **`~/.android/avd/<name>.avd/config.ini`** is patched: **`hw.device.manufacturer=Samsung`**, **`hw.device.name=medium_phone`**, LCD **1080×2400** / **420** dpi for common **SM-G996B** class devices.
+- **Every device start** and **every fingerprint save path** (PUT, randomize, revert on hub + legacy PUT/randomize) calls **`sync_avd_hardware_with_fingerprint`** so the INI stays aligned after edits.
+
+#### Anti-detection
+
+- [`backend/core/fingerprint/anti_detect.py`](backend/core/fingerprint/anti_detect.py): **`ro.build.characteristics`** favours **`default`** for Samsung/qcom; **CPU ABI list** follows fingerprint **`cpu_abi_list_spoof`**; extra flags (`ro.boot.qemu`, virtual device, etc.); Frida template uses dynamic **CPU** placeholders.
+- **Random fingerprint IP** in the generator **avoids `10.0.2.x`** (classic emulator guest range) when synthesizing private IPs.
+
+#### Frontend
+
+- **New device** dialog: **firmware package** dropdown; **default preset** Samsung **G996B + Android 15** where applicable.
+- **Device screen**: touch mode **Auto** (short movement → tap, longer → swipe) for H.264/JPEG surfaces.
+- **Fingerprint editor**: apply result shows **Arabic summary** + expandable **detail** from API.
+- **App Store**: install-to-device flow improvements (loading feedback) where implemented.
+
+#### Frida
+
+- Template script and notes: [`scripts/frida/`](scripts/frida/) (optional runtime hooks — does not replace `setprop`).
+
+#### Limitations (unchanged but explicit)
+
+- **Google AVD system image** remains **AOSP / Google APIs** — not a Samsung stock ROM. Deep Samsung-only behavior may still require **physical devices** or **heavy Frida** per app.
+- **`tag.display` / Google APIs** in AVD metadata cannot become “Samsung” without a different system image.
 
 ---
 
@@ -366,6 +419,7 @@ CI badge points to **`code-root/emulator-android`**; change it if you fork under
 3. [رسم — تدفق البث والتحكم](#رسم--تدفق-البث-والتحكم)
 4. [رسم — دورة حياة الجهاز](#رسم--دورة-حياة-الجهاز)
 5. [المميزات](#المميزات)
+5أ. [التحديثات الأخيرة (مارس 2026)](#التحديثات-الأخيرة-مارس-2026)
 6. [المكدس التقني](#المكدس-التقني)
 7. [التشغيل السريع](#التشغيل-السريع)
 8. [API و WebSocket](#api-و-websocket)
@@ -388,7 +442,7 @@ CI badge points to **`code-root/emulator-android`**; change it if you fork under
 - تسجيل الدخول و**JWT**.
 - **أجهزة** في قاعدة البيانات لكل مالك؛ **بصمة** و**بروكسي** اختياري.
 - **Start** يشغّل **emulator (AVD)** أو يربط **ADB serial**.
-- **بث الشاشة:** اشتراك WebSocket (`subscribe_screenshots`)، `adb screencap` مع قفل لكل جهاز، JPEG، Base64 مع أبعاد الجهاز لتحويل إحداثيات اللمس.
+- **بث الشاشة:** اشتراك WebSocket (`subscribe_screenshots`)، `adb screencap` مع قفل لكل جهاز، **JPEG واختياري H.264**، Base64 مع أبعاد الجهاز لتحويل إحداثيات اللمس.
 - **لمس وسحب:** `tap` / `swipe` عبر WebSocket؛ **طابور تحكم** يُفرغ قبل اللقطة التالية؛ **دمج مقاطع السحب المتسلسلة** في `swipe` واحد عند الإمكان.
 - **مستودع APK:** رفع وتثبيت عبر ADB، بما في ذلك **split APKs** (`install-multiple`).
 
@@ -497,6 +551,57 @@ stateDiagram-v2
 | **أمان** | JWT، أدوار، امتلاك الأجهزة |
 | **Docker** | Compose كامل |
 | **CI** | GitHub Actions |
+| **بث H.264** | مسار فيديو اختياري عبر WebSocket عند التفعيل |
+| **Fingerprint hub** | `GET/PUT /api/fingerprint/...`، إصدارات، رجوع، مقارنة، JSON موسّع |
+| **إخفاء محاكي** | طبقات setprop + كونسول + قالب Frida؛ تطبيق تلقائي بعد الإقلاع |
+
+---
+
+### التحديثات الأخيرة (مارس 2026)
+
+ملخص بالعربية لنفس التغييرات التقنية في [Recent updates (March 2026)](#recent-updates-march-2026) أعلاه.
+
+#### البصمة وواجهات API
+
+- **`/api/fingerprint/{device_id}`**: جلب وتحديث كامل، حقل **`extended`** (JSON) لبيانات إضافية (شريحة ثانية، حساسات، بطارية، شبكة، …)، و**`revision_label`** عند الحفظ.
+- **جدول `fingerprint_revisions`**: حفظ نسخ؛ **استرجاع** نسخة سابقة؛ **مقارنة** الحالي مع نسخة.
+- **تطبيق وعشوائية** عبر الـ hub تشغّل **فحوصات تناسق** قبل التطبيق (خطأ 422 عند فشل جاد).
+- **`GET /api/fingerprint/profiles/list`**: قائمة ملفات أجهزة للمحرر.
+- **دمج للتطبيق**: `fingerprint_row_to_apply_dict` يدمج أعمدة SQL مع `extended_json` لمسار الـ spoofer (ومسارات `/api/devices/.../fingerprint` القديمة).
+- **سامسونج موسّع**: عشرات `ro.product` / `ro.vendor` / CSC عبر [`samsung_enhanced.py`](backend/core/fingerprint/samsung_enhanced.py) — على AVD يُرفض جزء كبير **وهذا متوقع** (الصورة AOSP وليست One UI). الاستجابة تتضمن **`note`** و **`detail`** لشرح ذلك.
+- **بعد تشغيل الجهاز**: يُنفَّذ **تطبيق البصمة + anti-detect** تلقائياً مرة واحدة، مع تسجيل `fingerprint_auto_apply`.
+
+#### فريموير SAMFW / مجلد Odin
+
+- أسماء مثل **`G996BXXSJHZA6_G996BOXMJHZA6_XSG`** تحت [`firmware/`](firmware/) تُحلّل في [`samfw.py`](backend/core/firmware/samfw.py) (AP، CSC، كود مبيعات، لغة/بلد).
+- **دمج البصمة** يحدّث `ap_version` / `csc_version` ومقطع الـ PDA في `build_fingerprint`؛ لـ **XSG** يُضبط مقطع المنتج إلى **`o1sxxx`**.
+- **اختبارات**: [`backend/tests/test_firmware_xsg.py`](backend/tests/test_firmware_xsg.py).
+- **إنشاء جهاز**: الحقل **`firmware_package`** في الـ API؛ الواجهة تعرض قائمة من **`GET /api/meta/firmware-packages`**.
+
+#### ملف AVD (خصائص المحاكي في Android Studio)
+
+- لبصمة **Samsung**: إنشاء AVD بملف **`medium_phone`** ثم تعديل **`config.ini`**: **`hw.device.manufacturer=Samsung`**, **`hw.device.name=medium_phone`**, شاشة تقريبية **1080×2400** و**420** dpi لموديلات مثل **SM-G996B**.
+- عند **كل تشغيل** وعند **كل تحديث للبصمة** (PUT، عشوائي، revert على الـ hub والمسار القديم) يُستدعى **`sync_avd_hardware_with_fingerprint`** لتحديث الـ INI.
+
+#### مكافحة كشف المحاكي
+
+- [`anti_detect.py`](backend/core/fingerprint/anti_detect.py): **`ro.build.characteristics`** مناسب لسامسونج؛ **ABI** من **`cpu_abi_list_spoof`**؛ أعلام إضافية؛ قالب Frida يستخدم قيم CPU من البصمة.
+- توليد **IP عشوائي** في البصمة **يتجنب `10.0.2.x`**.
+
+#### الواجهة الأمامية
+
+- إنشاء جهاز: قائمة **حزمة فريموير**؛ **افتراضي preset** سامسونج G996B + Android 15 حيث ينطبق.
+- شاشة الجهاز: وضع لمس **تلقائي** (لمسة قصيرة = نقرة، حركة أوضح = سحب).
+- محرر البصمة: بعد Apply تظهر **ملخص عربي** + **تفصيل** من الـ API.
+
+#### Frida
+
+- قوالب في [`scripts/frida/`](scripts/frida/) — اختياري، لا يغني عن `setprop`.
+
+#### حدود واضحة
+
+- صورة نظام المحاكي تبقى **Google APIs / AOSP** وليست روم Samsung كاملاً.
+- **`tag.display` = Google APIs** لا يتغير بدون تغيير صورة النظام.
 
 ---
 

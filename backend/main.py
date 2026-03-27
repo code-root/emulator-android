@@ -11,7 +11,19 @@ from config import settings
 from db.database import create_all_tables
 from services.dev_seed import seed_dev_admin_if_configured
 from services.scheduler import device_scheduler
-from api.routes import auth, devices, fingerprint, apps, proxy, ws, ws_h264, operation_logs, meta_route, apk_store
+from api.routes import (
+    auth,
+    devices,
+    fingerprint,
+    fingerprint_hub,
+    apps,
+    proxy,
+    ws,
+    ws_h264,
+    operation_logs,
+    meta_route,
+    apk_store,
+)
 
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
@@ -92,6 +104,7 @@ async def value_error_handler(request: Request, exc: ValueError):
 app.include_router(auth.router, prefix="/api")
 app.include_router(devices.router, prefix="/api")
 app.include_router(fingerprint.router, prefix="/api")
+app.include_router(fingerprint_hub.router, prefix="/api")
 app.include_router(apps.router, prefix="/api")
 app.include_router(proxy.router, prefix="/api")
 app.include_router(operation_logs.router, prefix="/api")
