@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from api.deps import get_current_user
 from config import settings
 from core.fingerprint.generator import DEVICE_PROFILES, DEVICE_CREATION_PRESETS
+from core.fingerprint.geo_database import COUNTRY_DB, list_countries
 from core.firmware.scan import iter_firmware_packages
 from db.models import User
 
@@ -29,6 +30,35 @@ async def list_device_profiles(_user: User = Depends(get_current_user)) -> List[
         }
         for p in DEVICE_PROFILES
     ]
+
+
+@router.get("/countries")
+async def list_gps_countries(_user: User = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    Geographic database for GPS/IP/carrier selection.
+    Returns countries with cities, carriers (MCC/MNC), IP prefixes.
+    """
+    countries = list_countries()
+    country_details = {}
+    for code in [c["code"] for c in countries]:
+        if code in COUNTRY_DB:
+            db = COUNTRY_DB[code]
+            country_details[code] = {
+                "name": db["name"],
+                "country_iso": db["country_iso"],
+                "timezone": db["timezone"],
+                "language": db["language"],
+                "cities": [
+                    {"name": city, "latitude": lat, "longitude": lng, "altitude_m": alt}
+                    for city, lat, lng, alt in db["cities"]
+                ],
+                "carriers": [
+                    {"name": c["name"], "mcc": c["mcc"], "mnc": c["mnc"], "apn": c.get("apn", "")}
+                    for c in db["carriers"]
+                ],
+                "ip_prefixes": db.get("ip_prefixes", []),
+            }
+    return {"countries": country_details}
 
 
 @router.get("/firmware-packages")

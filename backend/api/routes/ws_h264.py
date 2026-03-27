@@ -22,6 +22,8 @@ import logging
 import time
 from collections import deque
 
+import re
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy import select
 
@@ -222,7 +224,7 @@ async def ws_h264_endpoint(
     stream_t  = asyncio.create_task(stream_task())
     control_t = asyncio.create_task(control_task())
 
-    # ── send initial status ───────────────────────────────────────────────────
+    # ── send initial status + actual device resolution ────────────────────────
     try:
         await websocket.send_json({
             "type":       "status",
@@ -231,6 +233,24 @@ async def ws_h264_endpoint(
             "adb_serial": device.adb_serial,
             "stream":     "h264",
         })
+
+        # Resolve real display size for touch coordinate mapping.
+        # screenrecord encodes at a lower resolution (e.g. 720×1280) but ADB
+        # input tap/swipe uses the device's native resolution (e.g. 1080×2400).
+        # Send device_size so the frontend can scale coordinates correctly.
+        if device.adb_serial:
+            try:
+                size_out = await adb.shell(device.adb_serial, "wm size")
+                # "Physical size: 1080x2400" or "Override size: 720x1280"
+                m = re.search(r"(\d{3,4})x(\d{3,4})", size_out or "")
+                if m:
+                    await websocket.send_json({
+                        "type":          "device_size",
+                        "device_width":  int(m.group(1)),
+                        "device_height": int(m.group(2)),
+                    })
+            except Exception:
+                pass
 
         # ── receive loop ─────────────────────────────────────────────────────
         while True:

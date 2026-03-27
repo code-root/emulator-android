@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Play, Square, RotateCcw, ArrowLeft, Loader2,
-  Monitor, Fingerprint, AppWindow, Shield, Terminal, ScrollText, Info
+  Monitor, Fingerprint, AppWindow, Shield, Terminal, ScrollText, Info, Zap
 } from 'lucide-react'
 import { getDevice, startDevice, stopDevice, restartDevice, executeShell } from '../api/client'
 import { useWebSocket, useDeviceH264 } from '../hooks/useWebSocket'
@@ -11,6 +11,7 @@ import DeviceScreen from '../components/DeviceScreen'
 import FingerprintEditor from '../components/FingerprintEditor'
 import APKInstaller from '../components/APKInstaller'
 import ProxyConfig from '../components/ProxyConfig'
+import FridaManager from '../components/FridaManager'
 import LogsViewer from '../components/LogsViewer'
 import type { DeviceStatus } from '../types'
 import clsx from 'clsx'
@@ -23,7 +24,7 @@ const STATUS_BADGE: Record<DeviceStatus, string> = {
   error: 'badge-error',
 }
 
-type Tab = 'overview' | 'screen' | 'fingerprint' | 'apps' | 'proxy' | 'console' | 'logs'
+type Tab = 'overview' | 'screen' | 'fingerprint' | 'apps' | 'proxy' | 'console' | 'frida' | 'logs'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'overview', label: 'Overview', icon: <Info className="w-4 h-4" /> },
@@ -32,6 +33,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'apps', label: 'Apps', icon: <AppWindow className="w-4 h-4" /> },
   { id: 'proxy', label: 'Proxy', icon: <Shield className="w-4 h-4" /> },
   { id: 'console', label: 'Console', icon: <Terminal className="w-4 h-4" /> },
+  { id: 'frida', label: 'Frida', icon: <Zap className="w-4 h-4" /> },
   { id: 'logs', label: 'Logs', icon: <ScrollText className="w-4 h-4" /> },
 ]
 
@@ -95,9 +97,21 @@ export default function DeviceDetail() {
   const { id } = useParams<{ id: string }>()
   const deviceId = Number(id)
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
-  const [activeTab, setActiveTab] = useState<Tab>('overview')
   const [currentStatus, setCurrentStatus] = useState<DeviceStatus | null>(null)
+
+  // Extract tab from URL path
+  const getActiveTabFromLocation = (): Tab => {
+    const pathMatch = location.pathname.match(/\/devices\/\d+(?:\/(\w+))?$/)
+    const tabParam = pathMatch?.[1]
+    if (tabParam && TABS.some(t => t.id === tabParam)) {
+      return tabParam as Tab
+    }
+    return 'overview'
+  }
+
+  const activeTab = getActiveTabFromLocation()
 
   const { data: device, isLoading } = useQuery({
     queryKey: ['device', deviceId],
@@ -239,7 +253,9 @@ export default function DeviceDetail() {
         {TABS.map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => tab.id === 'overview'
+              ? navigate(`/devices/${deviceId}`)
+              : navigate(`/devices/${deviceId}/${tab.id}`)}
             className={clsx(
               'flex items-center gap-2',
               activeTab === tab.id ? 'tab-btn-active' : 'tab-btn-inactive'
@@ -312,6 +328,8 @@ export default function DeviceDetail() {
             h264CanvasRef={h264CanvasRef}
             h264StreamWidth={h264.streamWidth}
             h264StreamHeight={h264.streamHeight}
+            h264DeviceWidth={h264.deviceWidth}
+            h264DeviceHeight={h264.deviceHeight}
             h264Error={h264.error}
             h264Status={h264.status}
           />
@@ -340,6 +358,10 @@ export default function DeviceDetail() {
           )}
           <ADBConsole deviceId={deviceId} isRunning={isRunning} />
         </div>
+      )}
+
+      {activeTab === 'frida' && (
+        <FridaManager deviceId={deviceId} isRunning={isRunning} />
       )}
 
       {activeTab === 'logs' && (

@@ -7,6 +7,8 @@ import {
   applyFingerprint,
   randomizeFingerprint,
   getDeviceProfiles,
+  listCountries,
+  randomizeFingerprintWithCountry,
 } from '../api/client'
 import type { DeviceFingerprint } from '../types'
 import clsx from 'clsx'
@@ -35,6 +37,7 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
   const [applyDetail, setApplyDetail] = useState<string | null>(null)
+  const [selectedCountry, setSelectedCountry] = useState<string>('')
 
   const { data: fp, isLoading } = useQuery({
     queryKey: ['fingerprint', deviceId],
@@ -44,6 +47,11 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
   const { data: profiles = [] } = useQuery({
     queryKey: ['device-profiles'],
     queryFn: getDeviceProfiles,
+  })
+
+  const { data: countriesData } = useQuery({
+    queryKey: ['countries'],
+    queryFn: listCountries,
   })
 
   useEffect(() => {
@@ -89,11 +97,14 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
   })
 
   const randomMutation = useMutation({
-    mutationFn: (apply: boolean) => randomizeFingerprint(deviceId, apply),
+    mutationFn: (apply: boolean) => {
+      const countryCode = selectedCountry || undefined
+      return randomizeFingerprintWithCountry(deviceId, undefined, countryCode, apply)
+    },
     onSuccess: (data) => {
       setForm({ ...data })
       queryClient.invalidateQueries({ queryKey: ['fingerprint', deviceId] })
-      setStatusMsg('Randomized')
+      setStatusMsg(`Randomized${selectedCountry ? ` (${selectedCountry})` : ''}`)
       setApplyDetail(null)
       setError(null)
     },
@@ -136,11 +147,29 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
     )
   }
 
+  const countryOptions = Object.entries(countriesData?.countries ?? {})
+    .sort(([, a], [, b]) => a.name.localeCompare(b.name))
+
   return (
     <div className="card space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="font-semibold text-gray-200">Device fingerprint</h3>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 items-center">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-400">Country:</label>
+            <select
+              value={selectedCountry}
+              onChange={(e) => setSelectedCountry(e.target.value)}
+              className="input btn-sm text-sm px-3 py-1.5 w-40"
+            >
+              <option value="">Global (random)</option>
+              {countryOptions.map(([code, country]) => (
+                <option key={code} value={code}>
+                  {country.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <button
             type="button"
             className="btn-secondary btn-sm"

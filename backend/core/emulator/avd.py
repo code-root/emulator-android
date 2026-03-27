@@ -12,8 +12,22 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# ملف جهاز AVD: لا يوجد تعريف Samsung رسمي في sdkmanager — نستخدم medium_phone ثم نعدّل config.ini
-_AVD_SAMSUNG_HW_DEVICE = "medium_phone"
+# ملف جهاز AVD: لا يوجد تعريف Samsung رسمي في sdkmanager — نستخدم أسماء حقيقية قريبة
+_SAMSUNG_AVD_DEVICE_NAMES = {
+    "SM-G996B": "Samsung Galaxy S21+",
+    "SM-G996U": "Samsung Galaxy S21+",
+    "SM-S918B": "Samsung Galaxy S23 Ultra",
+    "SM-S918U": "Samsung Galaxy S23 Ultra",
+    "SM-S908B": "Samsung Galaxy S22 Ultra",
+    "SM-S908U": "Samsung Galaxy S22 Ultra",
+    "SM-G991B": "Samsung Galaxy S21",
+    "SM-G991U": "Samsung Galaxy S21",
+    "SM-A536B": "Samsung Galaxy A53",
+    "SM-A536U": "Samsung Galaxy A53",
+    "SM-A525F": "Samsung Galaxy A52",
+    "SM-N986B": "Samsung Galaxy Note 20 Ultra",
+    "SM-N986U": "Samsung Galaxy Note 20 Ultra",
+}
 
 
 def _is_samsung_fingerprint_hw(
@@ -63,8 +77,11 @@ def write_avd_hardware_overlay(
     device_model: Optional[str],
 ) -> None:
     """
-    يحدّث ~/.android/avd/<name>.avd/config.ini ليطابق هوية سامسونج في نافذة خصائص المحاكي
+    يحدّث ~/.android/avd/<name>.avd/config.ini ليطابق هوية سامسونج حقيقية في نافذة خصائص المحاكي
     (hw.device.manufacturer / الاسم / الشاشة). لا يغيّر system image.
+
+    يستخدم أسماء أجهزة حقيقية (Samsung Galaxy S23 Ultra بدلاً من medium_phone)
+    لتجنب كشف المحاكي.
     """
     if not _is_samsung_fingerprint_hw(manufacturer, brand, device_model):
         return
@@ -73,19 +90,26 @@ def write_avd_hardware_overlay(
         logger.warning("AVD config.ini missing, skip hardware overlay: %s", cfg)
         return
     w, h, density = _samsung_lcd_for_model(device_model)
+
+    # اختيار اسم الجهاز من الخريطة بناءً على الموديل
+    device_name = _SAMSUNG_AVD_DEVICE_NAMES.get(
+        device_model.upper() if device_model else "",
+        "Samsung Galaxy"  # fallback
+    )
+
     try:
         text = cfg.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.warning("read AVD config failed %s: %s", cfg, e)
         return
     text = _upsert_avd_config_line(text, "hw.device.manufacturer", "Samsung")
-    text = _upsert_avd_config_line(text, "hw.device.name", _AVD_SAMSUNG_HW_DEVICE)
+    text = _upsert_avd_config_line(text, "hw.device.name", device_name)
     text = _upsert_avd_config_line(text, "hw.lcd.width", str(w))
     text = _upsert_avd_config_line(text, "hw.lcd.height", str(h))
     text = _upsert_avd_config_line(text, "hw.lcd.density", str(density))
     try:
         cfg.write_text(text, encoding="utf-8")
-        logger.info("AVD hardware overlay applied for %s (Samsung / %s)", avd_name, device_model)
+        logger.info("AVD hardware overlay applied for %s (Samsung / %s → %s)", avd_name, device_model, device_name)
     except OSError as e:
         logger.warning("write AVD config failed %s: %s", cfg, e)
 
@@ -94,6 +118,18 @@ def sync_avd_hardware_with_fingerprint(avd_name: Optional[str], fp: Any) -> None
     """
     بعد حفظ البصمة في DB (إنشاء/تحديث/عشوائي/revert): يحدّث config.ini للمحاكي
     إن كانت البصمة سامسونج؛ يُستدعى من مسارات API دون انتظار تشغيل الجهاز.
+
+    Policy for non-Samsung fingerprints (Pixel, Xiaomi, generic AOSP …)
+    -------------------------------------------------------------------
+    ``config.ini`` is **left untouched**.  Reasons:
+    - There are no official hw.device definitions for most OEMs in the AVD SDK;
+      patching with a non-existent device id would break the skin/display picker
+      in Android Studio.
+    - The default Google/AOSP device profile created by ``avdmanager`` is already
+      a reasonable fit for Pixel-class fingerprints.
+    - If you need a specific resolution for a Pixel/Xiaomi model, edit
+      ``~/.android/avd/<name>.avd/config.ini`` manually (``hw.lcd.width``,
+      ``hw.lcd.height``, ``hw.lcd.density``).
     """
     if not avd_name or fp is None:
         return

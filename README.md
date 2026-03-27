@@ -213,6 +213,128 @@ This release focuses on **Samsung-aligned fingerprints**, **clearer AVD hardware
 
 ---
 
+### AVD spoofing depth & hard limits
+
+The table below documents what **can** and **cannot** be changed on a stock Google AVD image. Understanding these limits helps set realistic expectations before deploying to production.
+
+| Layer | Can spoof | Cannot fix on Google AVD |
+|-------|-----------|--------------------------|
+| `ro.product.*` props | ✅ via `setprop` (survives reboot only with root remount) | Samsung One UI behaviour, Knox APIs, SELinux policy |
+| Build fingerprint | ✅ string value | Trust chain — `ro.boot.verifiedbootstate` stays `orange` on most AVDs |
+| IMEI / Android ID | ✅ setprop + Frida hook | Baseband / modem (no real radio hardware) |
+| GPS location | ✅ emulator console `geo fix` | Real cell-tower / Wi-Fi positioning |
+| Battery & sensors | ✅ emulator console + Frida noise | Physical sensor hardware entropy |
+| Network type label | ✅ setprop label | Real carrier registration, actual SIM |
+| MAC address | ✅ setprop (Android 10+) | Hardware MAC at kernel level |
+| GLES / GPU | ❌ partial — `ro.hardware.egl` string only | Mesa/SwiftShader renderer; real Adreno/Mali unavailable |
+| `/proc/cpuinfo` | ❌ read-only inside QEMU | QEMU CPU model; not patchable without custom kernel |
+| `/dev/` device nodes | ❌ | No real camera, barometer, NFC, fingerprint reader |
+| Samsung CSC / OMC | ✅ props only | System partition CSC packages absent |
+| Play Integrity | ❌ | Requires hardware attestation TEE + valid chain |
+
+**Frida scripts** under [`scripts/frida/`](scripts/frida/) can extend runtime spoofing (Java APIs, `TelephonyManager`, `SensorManager`, `Build` class) and partially compensate for some ❌ items above — at the cost of requiring a rooted/debuggable image and a running Frida server.
+
+---
+
+### Fingerprint model: one fingerprint + revisions per device
+
+Each device has **exactly one active fingerprint** at a time. Changes are non-destructive:
+
+- Every write (PUT, randomize, revert, import) **saves a revision snapshot** first.
+- `GET /api/fingerprint/{id}/revisions` — list up to 30 revisions.
+- `POST /api/fingerprint/{id}/revert/{revision_id}` — restore any snapshot.
+- `GET /api/fingerprint/{id}/compare?revision_id={id}` — field-level diff.
+
+Multi-profile support (multiple named fingerprints per device, switch between them) is **not yet implemented**. The current data model is `device ↔ 1 DeviceFingerprint + N FingerprintRevision`. If needed, design a `device_fingerprint_profiles` table and `device.active_fingerprint_id` FK (tracked in the backlog).
+
+#### Import from a real device
+
+```bash
+# Dump props from a real phone:
+adb -s <serial> shell getprop > my_phone.props
+
+# Import via API:
+curl -X POST “http://localhost:8000/api/fingerprint/{device_id}/import” \
+  -H “Authorization: Bearer $TOKEN” \
+  -H “Content-Type: application/json” \
+  -d '{“text”: “'$(cat my_phone.props | python3 -c “import sys,json; print(json.dumps(sys.stdin.read()))”)'”, “revision_label”: “real_device_import”}'
+```
+
+Known props are mapped automatically; the response includes `import_warnings` for any mismatches.
+
+#### Periodic jitter (IP / GPS / battery)
+
+```bash
+# Randomise GPS + IP with a small delta, apply live:
+curl -X POST “http://localhost:8000/api/fingerprint/{id}/jitter” \
+  -H “Authorization: Bearer $TOKEN” \
+  -H “Content-Type: application/json” \
+  -d '{“fields”: [“ip_address”, “latitude”, “longitude”], “apply”: true}'
+```
+
+Combine with a cron job or APScheduler task for automated rotation.
+
+---
+
+### H.264 live stream
+
+#### When to enable
+
+H.264 replaces the default JPEG screencap path. Use it when:
+- You need **< 100 ms** frame latency (JPEG path: 200–600 ms).
+- The device is **running Android 5+** with `screenrecord` available.
+- The server has sufficient CPU for `screenrecord` H.264 encoding (≈ 1 core per active stream).
+
+#### Requirements
+
+| Requirement | Notes |
+|-------------|-------|
+| Android API level | ≥ 21 (screenrecord --output-format=h264) |
+| ADB | Connected and authorized |
+| Server CPU | ~1 core per active H.264 stream |
+| Browser | Chrome / Edge (WebCodecs VideoDecoder); Firefox partial |
+
+#### WebSocket endpoint
+
+```
+ws://<host>/ws/{device_id}/h264?token=<JWT>
+```
+
+**Binary frames (server → browser):**
+
+| Byte 0 | Contents |
+|--------|----------|
+| `0x01` CONFIG | codec string + SPS + PPS — initialize VideoDecoder |
+| `0x02` FRAME | keyframe flag (1 byte) + PTS µs (8 bytes LE) + H.264 NAL data |
+
+**JSON frames (browser → server):** same protocol as `/ws/{device_id}` — `tap`, `swipe`, `keyevent`, `input_text`, `ping`.
+
+#### Touch coordinate mapping
+
+The H.264 canvas is rendered at a CSS display size that differs from the encoded frame resolution (default 720×1280). The frontend hook [`useDeviceH264.ts`](frontend/src/hooks/useDeviceH264.ts) exposes `frameWidth` / `frameHeight`; the touch layer in [`DeviceScreen.tsx`](frontend/src/components/DeviceScreen.tsx) maps pointer events through `clientToDeviceSurface()` using the **actual frame dimensions**, not the canvas CSS size. This ensures taps land at the correct device pixel regardless of zoom/fullscreen state.
+
+#### JPEG fallback
+
+- If no CONFIG frame arrives within **22 seconds**, `useDeviceH264` calls `onGiveUp()` and the UI reverts to JPEG mode automatically.
+- You can also switch manually via the stream-mode toggle in the device screen.
+
+#### Multi-device limits
+
+Running H.264 for many devices simultaneously multiplies CPU and bandwidth load. Rule of thumb: **2–4 concurrent streams** on a 4-core server at 720p/30 fps. For larger farms, consider:
+- Reducing resolution/fps (configurable in `ws_h264.py` → `stream_task` call).
+- Keeping JPEG mode for idle/background devices.
+- V2 Pro gRPC path for production-grade concurrency.
+
+---
+
+### Security & compliance
+
+> **Important:** This project is designed for testing, QA, and research on **devices you own or are authorised to test**. Spoofing device identifiers without the device owner's consent, or using this system to circumvent third-party platform policies (app stores, payment systems, fraud detection), may violate those platforms' terms of service and local law. The maintainer does not encourage or condone unauthorised use.
+
+See [`docs/REFERENCE_SPEC.md`](docs/REFERENCE_SPEC.md) for the full endpoint reference.
+
+---
+
 ### Tech stack
 
 | Layer | Stack |

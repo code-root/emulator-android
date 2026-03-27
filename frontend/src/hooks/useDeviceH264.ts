@@ -143,8 +143,16 @@ export interface UseDeviceH264Options {
 export interface UseDeviceH264Return {
   status: H264StreamStatus
   error: string | null
+  /** Encoding resolution of the H.264 stream (e.g. 720×1280). */
   streamWidth: number | null
   streamHeight: number | null
+  /**
+   * Actual device screen resolution reported by `wm size` (e.g. 1080×2400).
+   * Use these for ADB touch coordinate mapping, NOT streamWidth/streamHeight.
+   * Falls back to streamWidth/streamHeight when not yet received.
+   */
+  deviceWidth: number | null
+  deviceHeight: number | null
   sendControl: (msg: object) => void
   isConnected: boolean
   reconnect: () => void
@@ -161,6 +169,8 @@ export function useDeviceH264(
   const [error, setError] = useState<string | null>(null)
   const [streamWidth, setStreamWidth] = useState<number | null>(null)
   const [streamHeight, setStreamHeight] = useState<number | null>(null)
+  const [deviceWidth, setDeviceWidth] = useState<number | null>(null)
+  const [deviceHeight, setDeviceHeight] = useState<number | null>(null)
   const mountedRef = useRef(true)
   const enabledRef = useRef(enabled)
   enabledRef.current = enabled
@@ -192,6 +202,8 @@ export function useDeviceH264(
     closeDecoder()
     setStreamWidth(null)
     setStreamHeight(null)
+    setDeviceWidth(null)
+    setDeviceHeight(null)
     setStatus('idle')
   }, [closeDecoder])
 
@@ -228,11 +240,21 @@ export function useDeviceH264(
       if (!mountedRef.current) return
       if (typeof ev.data === 'string') {
         try {
-          const j = JSON.parse(ev.data) as { type?: string; message?: string }
+          const j = JSON.parse(ev.data) as {
+            type?: string
+            message?: string
+            device_width?: number
+            device_height?: number
+          }
           if (j.type === 'h264_error') {
             setError(j.message ?? 'فشل بث H.264')
             setStatus('error')
             onGiveUp?.()
+          } else if (j.type === 'device_size' && j.device_width && j.device_height) {
+            // Actual device screen resolution (e.g. 1080×2400) — used for touch
+            // coordinate mapping; distinct from stream encoding size (720×1280).
+            setDeviceWidth(j.device_width)
+            setDeviceHeight(j.device_height)
           }
         } catch {
           /* ignore non-JSON */
@@ -345,6 +367,8 @@ export function useDeviceH264(
       closeDecoder()
       setStreamWidth(null)
       setStreamHeight(null)
+      setDeviceWidth(null)
+      setDeviceHeight(null)
       if (!enabledRef.current) {
         setStatus('idle')
         return
@@ -405,6 +429,8 @@ export function useDeviceH264(
     error,
     streamWidth,
     streamHeight,
+    deviceWidth,
+    deviceHeight,
     sendControl,
     isConnected: status === 'connected',
     reconnect,

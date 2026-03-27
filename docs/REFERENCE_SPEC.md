@@ -38,12 +38,17 @@
 
 | الحقل / القدرة | الحالة | ملاحظات |
 |----------------|--------|---------|
-| IMEI, Android ID, Model, MAC, IP, GPS | **نموذج + تطبيق جزئي** | الحقول في `db/models.py` → `DeviceFingerprint`؛ التطبيق عبر `FingerprintSpoofer` + `apply` (يعتمد root/نوع الصورة) |
-| Xposed / LSPosed | **غير منفَّذ** | يتطلب صورة نظام تدعم الإطار + سياسات أمنية؛ يُوثَّق كتوسعة اختيارية وليس افتراض المزرعة |
-| Spoofing لكل جهاز | **منفَّذ** | بصمة لكل `device_id`؛ `PUT` + `POST .../fingerprint/apply` |
-| API للبصمة | **منفَّذ** | `GET/PUT /api/devices/{id}/fingerprint`, `POST .../apply`, `POST .../randomize` |
-| حزم SAMFW (ZIP) لمواءمة AP/CSC | **منفَّذ** | مجلد `firmware/` + `GET /api/meta/firmware-packages` + `POST /api/devices` مع `firmware_package` — انظر `core/firmware/samfw.py` (لا يستبدل system.img لـ AVD) |
-
+| IMEI, Android ID, Model, MAC, IP, GPS | **منفَّذ** | الحقول في `db/models.py` → `DeviceFingerprint`؛ التطبيق عبر `FingerprintSpoofer` |
+| Xposed / LSPosed | **غير منفَّذ** | يتطلب صورة نظام تدعم الإطار؛ موثَّق كتوسعة اختيارية |
+| Spoofing لكل جهاز | **منفَّذ** | بصمة لكل `device_id`؛ `PUT` + `POST .../apply` |
+| Hub API (موحّد) | **منفَّذ** | `GET/PUT /api/fingerprint/{id}`, apply, randomize, validate, revisions, revert, compare |
+| **Import من جهاز حقيقي** | **منفَّذ** | `POST /api/fingerprint/{id}/import` — يقبل نص getprop أو build.prop |
+| **Jitter (تحريك دوري)** | **منفَّذ** | `POST /api/fingerprint/{id}/jitter` — ip/gps/battery بدلتا صغيرة |
+| الإصدارات (Revisions) | **منفَّذ** | جدول `fingerprint_revisions`؛ list / revert / compare |
+| Extended JSON | **منفَّذ** | `extended_json` — SIM2, network, sensors, battery, location |
+| فحص التناسق | **منفَّذ** | Luhn, build_fingerprint, MCC/MNC range, carrier↔MCC country, sensor completeness |
+| حزم SAMFW | **منفَّذ** | `firmware/` + `GET /api/meta/firmware-packages` + `core/firmware/samfw.py` |
+| نموذج البيانات | **one-per-device + revisions** | بصمة واحدة نشطة + سجل تاريخي؛ تعدد الملفات غير منفَّذ (باكلوج) |
 ---
 
 ## 4) Backend (API)
@@ -85,12 +90,58 @@
 
 | الميزة | الحالة |
 |--------|--------|
-| Proxy لكل جهاز (mitmproxy) | **منفَّذ** |
-| GPS Spoofing | **جزئي** (يعتمد `console_port` + كونسول المحاكي) |
-| Network throttling (3G/4G) | **مخطط** (عبر أوامر كونسول المحاكي أو `adb` حسب الصورة) |
-| Scheduler | **منفَّذ** (`services/scheduler.py`) |
-| WebSocket | **منفَّذ** (`api/routes/ws.py`) |
+| Proxy لكل جهاز (mitmproxy) | **منفَّذ** |
+| GPS Spoofing | **منفَّذ** (emulator console `geo fix` + jitter endpoint) |
+| Network throttling (3G/4G) | **مخطط** |
+| Scheduler | **منفَّذ** (`services/scheduler.py`) |
+| WebSocket JPEG | **منفَّذ** (`api/routes/ws.py`) |
+| **WebSocket H.264** | **منفَّذ** (`api/routes/ws_h264.py`) |
+| **Network Inspector** | **مخطط** — اتصالات التطبيق + cookies/sessions في الداشبورد |
 
+---
+
+## 7a) H.264 WebSocket Protocol
+
+**المسار:** `ws://<host>/ws/{device_id}/h264?token=<JWT>`
+
+### رسائل الخادم → المتصفح (Binary)
+
+| Byte[0] | النوع | المحتوى |
+|---------|-------|---------|
+| `0x01` | **CONFIG** | `[1B type][4B width LE][4B height LE][2B codec_len][codec bytes][2B sps_len][SPS][2B pps_len][PPS]` |
+| `0x02` | **FRAME** | `[1B type][1B keyframe][8B PTS µs LE][NAL data...]` |
+
+### رسائل الخادم → المتصفح (JSON)
+
+| `type` | المعنى |
+|--------|--------|
+| `status` | حالة الجهاز + stream mode |
+| `ping` | keepalive (30s timeout) |
+| `h264_error` | خطأ التيار — `code`: `no_video_data` |
+| `error` | أمر غير معروف |
+| `pong` | رد على ping |
+
+### رسائل المتصفح → الخادم (JSON)
+
+| `action` | الحقول |
+|----------|--------|
+| `tap` | `x`, `y` (إحداثيات جهاز حقيقية بعد المعايرة) |
+| `swipe` | `x1`, `y1`, `x2`, `y2`, `duration_ms` |
+| `keyevent` | `key` (KEYCODE_*) |
+| `input_text` | `text` |
+| `screenshot_once` | — |
+| `ping` / `get_status` | — |
+
+### إعادة الاتصال (Frontend)
+- backoff أسي 1s → 30s max
+- Timeout: إن لم يصل CONFIG خلال **22 ثانية** → تراجع تلقائي إلى JPEG
+- تنظيف كامل عند unmount أو تغيير التبويب
+
+### تعيين إحداثيات اللمس (Touch Mapping)
+الـ canvas يُعرض بحجم CSS مختلف عن دقة الإطار (720×1280 افتراضي).  
+`useDeviceH264` يكشف `frameWidth/frameHeight`؛ دالة `clientToDeviceSurface()` في `DeviceScreen.tsx`  
+تحوّل إحداثيات المؤشر عبر نسبة `frameW/canvasClientW` × `frameH/canvasClientH`  
+لضمان الضغط على البكسل الصحيح في جميع حالات التكبير/ملء الشاشة.
 ---
 
 ## 8) Security

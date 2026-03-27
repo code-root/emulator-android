@@ -74,6 +74,86 @@ export default function App() {
           }
         />
         <Route
+          path="/devices/:id/overview"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <DeviceDetail />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/devices/:id/screen"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <DeviceDetail />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/devices/:id/fingerprint"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <DeviceDetail />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/devices/:id/apps"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <DeviceDetail />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/devices/:id/proxy"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <DeviceDetail />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/devices/:id/console"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <DeviceDetail />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/devices/:id/logs"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <DeviceDetail />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/devices/:id/frida"
+          element={
+            <ProtectedRoute>
+              <AppLayout>
+                <DeviceDetail />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/settings"
           element={
             <ProtectedRoute>

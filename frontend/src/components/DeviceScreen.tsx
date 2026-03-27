@@ -55,6 +55,9 @@ function clientToDeviceSurface(
   shot: LiveScreenshotFrame | null,
   streamW: number | null,
   streamH: number | null,
+  /** Actual device screen resolution from `wm size` — used for ADB coords in H.264 mode. */
+  nativeDevW: number | null,
+  nativeDevH: number | null,
   mode: 'jpeg' | 'h264',
   clientX: number,
   clientY: number
@@ -65,9 +68,12 @@ function clientToDeviceSurface(
   if (mode === 'jpeg' && shot) {
     devW = shot.deviceWidth ?? shot.width
     devH = shot.deviceHeight ?? shot.height
-  } else if (mode === 'h264' && streamW && streamH) {
-    devW = streamW
-    devH = streamH
+  } else if (mode === 'h264') {
+    // ADB input tap/swipe uses native device resolution (e.g. 1080×2400).
+    // streamW/streamH is the screenrecord encoding size (e.g. 720×1280).
+    // Prefer nativeDevW/H (from `wm size`); fall back to stream dims.
+    devW = nativeDevW ?? streamW ?? 1080
+    devH = nativeDevH ?? streamH ?? 1920
   } else if (el instanceof HTMLImageElement) {
     devW = el.naturalWidth || 1080
     devH = el.naturalHeight || 1920
@@ -101,6 +107,9 @@ interface DeviceScreenProps {
   h264CanvasRef: RefObject<HTMLCanvasElement>
   h264StreamWidth: number | null
   h264StreamHeight: number | null
+  /** Actual device screen resolution (from wm size) — used for ADB touch coordinates. */
+  h264DeviceWidth: number | null
+  h264DeviceHeight: number | null
   h264Error: string | null
   h264Status: H264StreamStatus
 }
@@ -119,6 +128,8 @@ export default function DeviceScreen({
   h264CanvasRef,
   h264StreamWidth,
   h264StreamHeight,
+  h264DeviceWidth,
+  h264DeviceHeight,
   h264Error,
   h264Status,
 }: DeviceScreenProps) {
@@ -294,6 +305,8 @@ export default function DeviceScreen({
       liveShotRef.current,
       h264StreamWidth,
       h264StreamHeight,
+      h264DeviceWidth,
+      h264DeviceHeight,
       screenStreamMode,
       clientX,
       clientY
@@ -314,6 +327,8 @@ export default function DeviceScreen({
             liveShotRef.current,
             h264StreamWidth,
             h264StreamHeight,
+            h264DeviceWidth,
+            h264DeviceHeight,
             screenStreamMode,
             p.clientX,
             p.clientY

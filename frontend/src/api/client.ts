@@ -283,6 +283,104 @@ export async function getFirmwarePackages(): Promise<FirmwarePackageMeta[]> {
   return res.data
 }
 
+// ─── Countries & GPS/IP ────────────────────────────────────────────────────
+
+export interface CountryData {
+  name: string
+  country_iso: string
+  timezone: string
+  language: string
+  cities: Array<{ name: string; latitude: number; longitude: number; altitude_m: number }>
+  carriers: Array<{ name: string; mcc: string; mnc: string; apn: string }>
+  ip_prefixes: string[]
+}
+
+export async function listCountries(): Promise<{ countries: Record<string, CountryData> }> {
+  const res = await apiClient.get('/api/meta/countries')
+  return res.data
+}
+
+// ─── Fingerprint Randomization ────────────────────────────────────────────
+
+export async function randomizeFingerprintWithCountry(
+  id: number,
+  deviceModel?: string,
+  countryCode?: string,
+  apply = false
+): Promise<DeviceFingerprint> {
+  const params = new URLSearchParams()
+  if (deviceModel) params.append('device_model', deviceModel)
+  if (countryCode) params.append('country_code', countryCode)
+  if (apply) params.append('apply', 'true')
+
+  const res = await apiClient.post<DeviceFingerprint>(
+    `/api/fingerprint/${id}/randomize?${params.toString()}`
+  )
+  return res.data
+}
+
+// ─── Frida Management ──────────────────────────────────────────────────────
+
+export interface FridaStatus {
+  device_id: number
+  active: boolean
+  pid: number | null
+  serial: string
+}
+
+export interface FridaProcess {
+  pid: number
+  name: string
+}
+
+export interface FridaAttachRequest {
+  process_name: string
+  script_type: 'anti_detect' | 'custom'
+  script_code?: string
+}
+
+export async function getFridaStatus(id: number): Promise<FridaStatus> {
+  const res = await apiClient.get(`/api/devices/${id}/frida/status`)
+  return res.data
+}
+
+export async function listFridaProcesses(id: number): Promise<{ processes: FridaProcess[] }> {
+  const res = await apiClient.get(`/api/devices/${id}/frida/processes`)
+  return res.data
+}
+
+export async function attachFrida(id: number, body: FridaAttachRequest): Promise<any> {
+  const res = await apiClient.post(`/api/devices/${id}/frida/attach`, body)
+  return res.data
+}
+
+export async function detachFrida(id: number): Promise<{ success: boolean; message: string }> {
+  const res = await apiClient.post(`/api/devices/${id}/frida/detach`)
+  return res.data
+}
+
+export async function injectFridaScript(
+  id: number,
+  pid: number,
+  scriptCode: string
+): Promise<any> {
+  const res = await apiClient.post(`/api/devices/${id}/frida/inject`, {
+    pid,
+    script_code: scriptCode,
+  })
+  return res.data
+}
+
+export async function getFridaScript(id: number): Promise<{ device_id: number; script: string; mime_type: string }> {
+  const res = await apiClient.get(`/api/devices/${id}/frida/script`)
+  return res.data
+}
+
+export async function pushFridaScript(id: number): Promise<{ success: boolean; remote_path: string; message: string }> {
+  const res = await apiClient.post(`/api/devices/${id}/frida/push-script`)
+  return res.data
+}
+
 // ─── WebSocket URL helper ──────────────────────────────────────────────────
 /**
  * WebSocket origin:

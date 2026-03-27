@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import random
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.deps import get_db, get_current_user
 from db.models import Device, DeviceFingerprint, DeviceStatus, FingerprintRevision, User
 from core.fingerprint.generator import FingerprintGenerator
+from core.fingerprint.geo_database import (
+    pick_random_location, get_carrier_for_country,
+    generate_realistic_ip, generate_imei, random_samsung_mac,
+    random_samsung_serial, generate_android_id, build_fingerprint_for_model,
+)
 from core.fingerprint.spoofer import FingerprintSpoofer
 from core.fingerprint.samsung_enhanced import (
     is_samsung_fingerprint,
@@ -24,6 +30,8 @@ from core.fingerprint.samsung_enhanced import (
 )
 from core.fingerprint.merge import fingerprint_row_to_apply_dict, parse_extended
 from core.fingerprint.consistency import run_consistency_checks
+from core.fingerprint.importer import parse_prop_text, map_props_to_fingerprint
+from core.fingerprint.extended_defaults import merge_extended
 from core.emulator.avd import sync_avd_hardware_with_fingerprint
 from core.tools.adb import ADBTool
 
@@ -250,22 +258,80 @@ async def apply_fingerprint_hub(
 async def randomize_fingerprint_hub(
     device_id: int,
     device_model: Optional[str] = None,
+    country_code: Optional[str] = None,
     apply: bool = False,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """
+    Randomize fingerprint with realistic geo-tagged data from geo_database.
+
+    Query params:
+    - device_model: Samsung model (SM-G996B, SM-S918B, etc.)
+    - country_code: ISO country code (SA, US, GB, etc.) — if set, location/IP/carrier from that country
+    - apply: if true and device running, apply to live device immediately
+    """
     device, fp = await _device_fp(device_id, db, user)
     await _save_revision(db, device_id, fp, "before_randomize")
-    new_data = fp_generator.generate(device_model=device_model)
-    ext = new_data.pop("extended", None)
+
+    # Use geo_database for realistic generation
+    location = pick_random_location(country_code)
+    carrier = get_carrier_for_country(country_code)
+    ip = generate_realistic_ip(country_code)
+
+    # Preserve or use device_model
+    model = device_model or fp.device_model or "SM-G996B"
+
+    # Generate realistic identifiers
+    new_data = {
+        "device_model": model,
+        "imei": generate_imei(model),
+        "android_id": generate_android_id(),
+        "mac_address": random_samsung_mac(),
+        "serial_number": random_samsung_serial(model),
+        "latitude": location["latitude"],
+        "longitude": location["longitude"],
+        "altitude": location["altitude_m"],
+        "timezone": location.get("timezone", "UTC"),
+        "network_type": "LTE",  # default to LTE
+        "ip_address": ip,
+        "mcc": carrier.get("mcc"),
+        "mnc": carrier.get("mnc"),
+    }
+
+    # Build fingerprint string if we have build_id, ap_version, android_version
+    if fp.build_id and fp.ap_version and fp.android_version:
+        new_data["build_fingerprint"] = build_fingerprint_for_model(
+            model, fp.ap_version, fp.android_version, fp.build_id
+        )
+
+    # Keep manufacturer/brand/etc. from existing profile if not set
+    if not fp.manufacturer:
+        new_data["manufacturer"] = "samsung"
+    if not fp.brand:
+        new_data["brand"] = "samsung"
+    if not fp.device_codename:
+        new_data["device_codename"] = "o1s"
+
+    # Apply to ORM row
     for k, v in new_data.items():
-        if hasattr(fp, k):
+        if hasattr(fp, k) and v is not None:
             setattr(fp, k, v)
-    if ext is not None:
-        fp.extended_json = json.dumps(ext, ensure_ascii=False)
+
+    # Handle extended JSON (preserve existing or empty)
+    if fp.extended_json:
+        try:
+            ext = json.loads(fp.extended_json)
+        except Exception:
+            ext = {}
+    else:
+        ext = {}
+
+    fp.extended_json = json.dumps(ext, ensure_ascii=False)
     await db.flush()
     await db.refresh(fp)
     sync_avd_hardware_with_fingerprint(device.avd_name, fp)
+
     if apply and device.status == DeviceStatus.running and device.adb_serial:
         try:
             d = fingerprint_row_to_apply_dict(fp, {"console_port": device.console_port})
@@ -273,6 +339,7 @@ async def randomize_fingerprint_hub(
             await fp_spoofer.apply(adb_tool, device.adb_serial, d)
         except Exception:
             pass
+
     return _row_to_response(fp)
 
 
@@ -384,3 +451,166 @@ async def list_profiles():
     from core.fingerprint.generator import DEVICE_PROFILES
 
     return [{"device_model": p["device_model"], "manufacturer": p.get("manufacturer")} for p in DEVICE_PROFILES]
+
+
+# ---------------------------------------------------------------------------
+# Import from real device (getprop / build.prop)
+# ---------------------------------------------------------------------------
+
+class ImportBody(BaseModel):
+    """Paste the output of ``adb shell getprop`` or the text of a ``build.prop`` file."""
+    text: str = Field(..., description="Raw getprop output or build.prop text from a real device")
+    revision_label: Optional[str] = None
+
+
+@router.post("/{device_id}/import", response_model=FingerprintFullResponse)
+async def import_fingerprint(
+    device_id: int,
+    body: ImportBody,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Parse ``getprop`` / ``build.prop`` text from a real device and populate the fingerprint.
+
+    - Known props are mapped to flat columns; remaining props go into ``extended_json``.
+    - Consistency is checked as **warnings only** — the import never fails on mismatch.
+    - A revision snapshot is saved before writing.
+    - AVD ``config.ini`` is synced if the manufacturer resolves to Samsung.
+    """
+    device, fp = await _device_fp(device_id, db, user)
+    await _save_revision(db, device_id, fp, body.revision_label or "before_import")
+
+    props = parse_prop_text(body.text)
+    if not props:
+        raise HTTPException(400, "No recognisable prop lines found — check the input format")
+
+    flat, extended_patch, import_warnings = map_props_to_fingerprint(props)
+
+    # Apply flat fields to the row
+    for k, v in flat.items():
+        if hasattr(fp, k):
+            setattr(fp, k, v)
+
+    # Deep-merge extended patch into existing extended_json
+    existing_ext = parse_extended(fp.extended_json)
+    merged_ext = merge_extended(existing_ext, extended_patch)
+    fp.extended_json = json.dumps(merged_ext, ensure_ascii=False)
+
+    await db.flush()
+    await db.refresh(fp)
+    sync_avd_hardware_with_fingerprint(device.avd_name, fp)
+
+    response = _row_to_response(fp)
+    # Attach import warnings to the response as an extra field
+    return {
+        **response.model_dump(),
+        "import_warnings": import_warnings,
+        "props_parsed": len(props),
+        "fields_imported": list(flat.keys()),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Jitter — randomise select fields with small delta
+# ---------------------------------------------------------------------------
+
+_JITTER_FIELDS = frozenset({"ip_address", "latitude", "longitude", "battery_level"})
+
+
+class JitterBody(BaseModel):
+    fields: List[str] = Field(
+        default=["ip_address", "latitude", "longitude"],
+        description="Which fields to jitter. Allowed: ip_address, latitude, longitude, battery_level",
+    )
+    apply: bool = Field(False, description="Apply to device immediately if running")
+
+
+def _jitter_ip(current: Optional[str]) -> str:
+    """Return a nearby private IP (last octet ± small random delta)."""
+    if current:
+        parts = current.split(".")
+        if len(parts) == 4:
+            try:
+                last = int(parts[3])
+                new_last = max(1, min(254, last + random.randint(-5, 5)))
+                if new_last != last:
+                    return f"{parts[0]}.{parts[1]}.{parts[2]}.{new_last}"
+            except ValueError:
+                pass
+    # Fallback: generate a random 192.168.x.x
+    return f"192.168.{random.randint(1, 254)}.{random.randint(2, 253)}"
+
+
+def _jitter_coord(value: Optional[float], delta: float) -> float:
+    if value is None:
+        value = 0.0
+    return round(value + random.uniform(-delta, delta), 6)
+
+
+@router.post("/{device_id}/jitter")
+async def jitter_fingerprint(
+    device_id: int,
+    body: JitterBody,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Apply small randomised perturbations to selected fingerprint fields.
+
+    Useful for rotating IPs/GPS periodically without a full re-fingerprint.
+    Changes are persisted to DB and optionally applied live to the running device.
+
+    **Allowed fields:** ``ip_address``, ``latitude``, ``longitude``, ``battery_level``
+    (battery_level is written to ``extended_json.battery.level_percent`` and applied
+    via the emulator console if the device is running).
+    """
+    unknown = [f for f in body.fields if f not in _JITTER_FIELDS]
+    if unknown:
+        raise HTTPException(400, f"Unknown jitter fields: {unknown}. Allowed: {sorted(_JITTER_FIELDS)}")
+
+    device, fp = await _device_fp(device_id, db, user)
+    await _save_revision(db, device_id, fp, "before_jitter")
+
+    changed: Dict[str, Any] = {}
+
+    if "ip_address" in body.fields:
+        fp.ip_address = _jitter_ip(fp.ip_address)
+        changed["ip_address"] = fp.ip_address
+
+    if "latitude" in body.fields:
+        fp.latitude = _jitter_coord(fp.latitude, 0.005)   # ~500 m radius
+        changed["latitude"] = fp.latitude
+
+    if "longitude" in body.fields:
+        fp.longitude = _jitter_coord(fp.longitude, 0.007)
+        changed["longitude"] = fp.longitude
+
+    if "battery_level" in body.fields:
+        existing_ext = parse_extended(fp.extended_json)
+        current_level = (existing_ext.get("battery") or {}).get("level_percent", 82)
+        new_level = max(15, min(99, int(current_level) + random.randint(-3, 3)))
+        patched = merge_extended(existing_ext, {"battery": {"level_percent": new_level}})
+        fp.extended_json = json.dumps(patched, ensure_ascii=False)
+        changed["battery_level"] = new_level
+
+    await db.flush()
+    await db.refresh(fp)
+
+    applied_live = False
+    apply_errors: List[str] = []
+    if body.apply and device.status == DeviceStatus.running and device.adb_serial:
+        try:
+            data = fingerprint_row_to_apply_dict(fp, {"console_port": device.console_port})
+            data = merge_profile_defaults_for_apply(data)
+            await fp_spoofer.apply(adb_tool, device.adb_serial, data)
+            applied_live = True
+        except Exception as exc:
+            apply_errors.append(str(exc))
+
+    return {
+        "success": True,
+        "changed": changed,
+        "applied_live": applied_live,
+        "apply_errors": apply_errors,
+    }
