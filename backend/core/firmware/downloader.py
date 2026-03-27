@@ -93,8 +93,6 @@ async def start_firmware_download(
                 job.status = 'failed'
                 job.error = 'Could not fetch firmware version from Samsung'
                 return job
-            # Construct Samsung CDN URL
-            url = f'https://cfs4.samsungmobile.com/{csc.upper()}/{model.upper()}/{job.ap_version}.zip'
         except Exception as e:
             logger.error(f'Error fetching firmware version: {e}')
             job.status = 'needs_url'
@@ -102,122 +100,163 @@ async def start_firmware_download(
             job.requires_url = True
             return job
 
+    # Build list of URLs to try (custom URL first, then fallback sources)
+    urls_to_try = []
+    if url:
+        urls_to_try.append(('custom', url))
+
+    if job.ap_version:
+        # Add fallback sources
+        for source in settings.FIRMWARE_SOURCES:
+            try:
+                fallback_url = source['url_template'].format(
+                    csc=csc.upper(),
+                    model=model.upper(),
+                    ap_version=job.ap_version
+                )
+                urls_to_try.append((source['name'], fallback_url))
+            except Exception as e:
+                logger.warning(f"Could not format URL for {source['name']}: {e}")
+
     # Launch background download task
-    task = asyncio.create_task(_download_worker(job, url))
+    task = asyncio.create_task(_download_worker(job, urls_to_try))
     job._task = task
 
     return job
 
 
-async def _download_worker(job: DownloadJob, url: str) -> None:
+async def _download_worker(job: DownloadJob, urls_to_try: list[tuple[str, str]]) -> None:
     """
     Background worker that downloads firmware and verifies integrity.
+    Tries multiple sources sequentially if primary fails.
     Updates job state in-place.
+
+    Args:
+        job: DownloadJob instance
+        urls_to_try: List of (source_name, url) tuples to try in order
     """
-    try:
-        job.status = 'downloading'
-        firmware_dir = Path(settings.FIRMWARE_PACKAGES_DIR)
-        firmware_dir.mkdir(parents=True, exist_ok=True)
+    firmware_dir = Path(settings.FIRMWARE_PACKAGES_DIR)
+    firmware_dir.mkdir(parents=True, exist_ok=True)
 
-        # Construct destination filename in SAMFW naming convention
-        dest_filename = f'SAMFW.COM_{job.model}_{job.csc}_{job.ap_version}_fac.zip'
-        dest_path = firmware_dir / dest_filename
-        job.dest_path = str(dest_path)
+    # Construct destination filename in SAMFW naming convention
+    dest_filename = f'SAMFW.COM_{job.model}_{job.csc}_{job.ap_version}_fac.zip'
+    dest_path = firmware_dir / dest_filename
+    job.dest_path = str(dest_path)
 
-        # Download with streaming
-        async with httpx.AsyncClient(timeout=300) as client:
-            async with client.stream('GET', url) as response:
-                if response.status_code != 200:
-                    job.status = 'failed'
-                    job.error = f'HTTP {response.status_code}: {response.reason_phrase}'
-                    return
+    last_error = None
 
-                # Get total size from Content-Length header
-                try:
-                    job.total_bytes = int(response.headers.get('content-length', 0))
-                except (ValueError, TypeError):
-                    job.total_bytes = None
-
-                # Prepare hashing
-                md5 = hashlib.md5()
-                sha256 = hashlib.sha256()
-
-                # Stream download + hash
-                async with aio_open(dest_path, 'wb') as f:
-                    async for chunk in response.aiter_bytes(chunk_size=CHUNK_SIZE):
-                        if job.status == 'cancelled':
-                            await f.close()
-                            dest_path.unlink(missing_ok=True)
-                            return
-
-                        await f.write(chunk)
-                        md5.update(chunk)
-                        sha256.update(chunk)
-
-                        job.downloaded_bytes += len(chunk)
-                        if job.total_bytes and job.total_bytes > 0:
-                            job.progress_pct = min(
-                                100.0, (job.downloaded_bytes / job.total_bytes) * 100
-                            )
-
-        # Verify phase
-        job.status = 'verifying'
-        job.md5_hash = md5.hexdigest()
-        job.sha256_hash = sha256.hexdigest()
-
-        logger.info(
-            f'Firmware downloaded: {job.model}/{job.csc} → {dest_filename} '
-            f'({job.downloaded_bytes} bytes, SHA256: {job.sha256_hash})'
-        )
-
-        job.status = 'done'
-        job.progress_pct = 100.0
-
-        # Auto-save to database
+    # Try each URL source
+    for source_name, url in urls_to_try:
         try:
-            async with AsyncSessionLocal() as db:
-                # Check if entry already exists by filename
-                result = await db.execute(
-                    select(FirmwareEntry).filter(FirmwareEntry.filename == dest_filename)
-                )
-                existing = result.scalar_one_or_none()
+            logger.info(f"Attempting download from {source_name}: {url[:60]}...")
+            job.status = 'downloading'
+            job.downloaded_bytes = 0
+            job.progress_pct = 0.0
 
-                if existing:
-                    # Update existing entry
-                    existing.ap_version = job.ap_version
-                    existing.size_bytes = job.downloaded_bytes
-                    existing.local_path = str(dest_path)
-                else:
-                    # Create new entry
-                    entry = FirmwareEntry(
-                        source='auto',
-                        device_model=job.model,
-                        sales_code=job.csc,
-                        ap_version=job.ap_version,
-                        filename=dest_filename,
-                        size_bytes=job.downloaded_bytes,
-                        local_path=str(dest_path),
+            # Clean up any partial file from previous attempt
+            dest_path.unlink(missing_ok=True)
+
+            # Download with streaming
+            async with httpx.AsyncClient(timeout=300) as client:
+                async with client.stream('GET', url) as response:
+                    if response.status_code != 200:
+                        last_error = f'HTTP {response.status_code}: {response.reason_phrase}'
+                        logger.warning(f"  {source_name} failed: {last_error}")
+                        continue
+
+                    # Get total size from Content-Length header
+                    try:
+                        job.total_bytes = int(response.headers.get('content-length', 0))
+                    except (ValueError, TypeError):
+                        job.total_bytes = None
+
+                    # Prepare hashing
+                    md5 = hashlib.md5()
+                    sha256 = hashlib.sha256()
+
+                    # Stream download + hash
+                    async with aio_open(dest_path, 'wb') as f:
+                        async for chunk in response.aiter_bytes(chunk_size=CHUNK_SIZE):
+                            if job.status == 'cancelled':
+                                await f.close()
+                                dest_path.unlink(missing_ok=True)
+                                return
+
+                            await f.write(chunk)
+                            md5.update(chunk)
+                            sha256.update(chunk)
+
+                            job.downloaded_bytes += len(chunk)
+                            if job.total_bytes and job.total_bytes > 0:
+                                job.progress_pct = min(
+                                    100.0, (job.downloaded_bytes / job.total_bytes) * 100
+                                )
+
+                    # Verify phase
+                    job.status = 'verifying'
+                    job.md5_hash = md5.hexdigest()
+                    job.sha256_hash = sha256.hexdigest()
+
+                    logger.info(
+                        f'✅ Firmware downloaded from {source_name}: {job.model}/{job.csc} → {dest_filename} '
+                        f'({job.downloaded_bytes} bytes, SHA256: {job.sha256_hash})'
                     )
-                    db.add(entry)
 
-                await db.commit()
-                logger.info(f'Firmware entry saved to database: {dest_filename}')
+                    job.status = 'done'
+                    job.progress_pct = 100.0
+
+                    # Auto-save to database
+                    try:
+                        async with AsyncSessionLocal() as db:
+                            # Check if entry already exists by filename
+                            result = await db.execute(
+                                select(FirmwareEntry).filter(FirmwareEntry.filename == dest_filename)
+                            )
+                            existing = result.scalar_one_or_none()
+
+                            if existing:
+                                # Update existing entry
+                                existing.ap_version = job.ap_version
+                                existing.size_bytes = job.downloaded_bytes
+                                existing.local_path = str(dest_path)
+                            else:
+                                # Create new entry
+                                entry = FirmwareEntry(
+                                    source='auto',
+                                    device_model=job.model,
+                                    sales_code=job.csc,
+                                    ap_version=job.ap_version,
+                                    filename=dest_filename,
+                                    size_bytes=job.downloaded_bytes,
+                                    local_path=str(dest_path),
+                                )
+                                db.add(entry)
+
+                            await db.commit()
+                            logger.info(f'Firmware entry saved to database: {dest_filename}')
+                    except Exception as e:
+                        logger.error(f'Failed to save firmware entry to database: {e}')
+
+                    return  # Success! Exit the retry loop
+
+        except asyncio.CancelledError:
+            job.status = 'cancelled'
+            job.error = 'Download cancelled by user'
+            if job.dest_path:
+                Path(job.dest_path).unlink(missing_ok=True)
+            raise
+
         except Exception as e:
-            logger.error(f'Failed to save firmware entry to database: {e}')
+            last_error = str(e)
+            logger.warning(f'  {source_name} failed: {last_error}')
+            # Continue to next source
 
-    except asyncio.CancelledError:
-        job.status = 'cancelled'
-        job.error = 'Download cancelled by user'
-        if job.dest_path:
-            Path(job.dest_path).unlink(missing_ok=True)
-        raise
-
-    except Exception as e:
-        job.status = 'failed'
-        job.error = str(e)
-        logger.error(f'Firmware download failed for {job.model}/{job.csc}: {e}')
-        if job.dest_path:
-            Path(job.dest_path).unlink(missing_ok=True)
+    # All sources failed
+    job.status = 'failed'
+    job.error = f'All download sources failed. Last error: {last_error}'
+    logger.error(f'Firmware download failed for {job.model}/{job.csc}: {job.error}')
+    if job.dest_path:
+        Path(job.dest_path).unlink(missing_ok=True)
 
 
 async def get_job(job_id: str) -> Optional[DownloadJob]:

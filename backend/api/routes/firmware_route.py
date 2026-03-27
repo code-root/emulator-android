@@ -122,6 +122,23 @@ class FirmwareEntryResponse(BaseModel):
         from_attributes = True
 
 
+@router.get("/sources")
+async def get_firmware_sources(
+    _user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Get list of available firmware download sources (primary + fallbacks).
+
+    Returns:
+    - sources: List of available sources with names
+    - description: How sources are tried
+    """
+    return {
+        "sources": [{"name": s["name"]} for s in settings.FIRMWARE_SOURCES],
+        "description": "Samsung CDN is tried first, then fallback mirrors in order"
+    }
+
+
 @router.post("/download")
 async def start_download(
     req: FirmwareDownloadRequest, _user: User = Depends(get_current_user)

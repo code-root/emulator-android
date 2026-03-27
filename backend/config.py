@@ -81,6 +81,14 @@ class Settings(BaseSettings):
     # الواجهة التي نُعيد التوجيه إليها بعد النجاح (يحمل ?token=)
     FRONTEND_URL: str = "http://localhost:5173"
 
+    # Firmware download sources — tried in order if primary fails
+    FIRMWARE_SOURCES: list[dict] = [
+        {"name": "Samsung CDN", "url_template": "https://cfs4.samsungmobile.com/{csc}/{model}/{ap_version}.zip"},
+        {"name": "SamFW (Mirror 1)", "url_template": "https://mirror.samfw.com/firmware/{model}/{csc}/{ap_version}.zip"},
+        {"name": "Sammobile (Archive)", "url_template": "https://firmware.sammobile.com/{model}-{csc}-{ap_version}.zip"},
+        {"name": "FirmwareDB (Global)", "url_template": "https://firmwaredb.com/download/{model}/{csc}/{ap_version}.zip"},
+    ]
+
     # CORS
     CORS_ORIGINS: list[str] = [
         "http://localhost:3000",

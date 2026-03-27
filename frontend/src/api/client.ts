@@ -517,6 +517,11 @@ export async function syncFirmwareEntries(): Promise<{ success: boolean; importe
   return res.data
 }
 
+export async function getFirmwareSources(): Promise<{ sources: Array<{ name: string }>; description: string }> {
+  const res = await apiClient.get('/api/firmware/sources')
+  return res.data
+}
+
 // ─── WebSocket URL helper ──────────────────────────────────────────────────
 /**
  * WebSocket origin:

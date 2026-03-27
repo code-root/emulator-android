@@ -494,16 +494,23 @@ export default function FirmwareManager() {
       {/* Info */}
       <div className="card bg-blue-900/20 border border-blue-800 text-blue-300 text-sm space-y-2">
         <p>
-          <strong>Auto-download:</strong> Fetches firmware from Samsung FOTA servers for your chosen region.
+          <strong>Auto-download:</strong> Fetches firmware metadata from Samsung FOTA servers.
         </p>
         <p>
-          <strong>Fallback URL:</strong> If Samsung CDN blocks your region, provide a direct link (e.g., from SamFW.com).
+          <strong>Multiple Sources:</strong> If Samsung CDN is blocked, the system automatically tries these fallback sources:
+          <br/>
+          <code className="text-blue-200 text-xs">
+            Samsung CDN → SamFW Mirror → Sammobile → FirmwareDB (Global)
+          </code>
         </p>
         <p>
-          <strong>Verification:</strong> Files are checked with MD5 + SHA256 during download.
+          <strong>Manual Fallback:</strong> Provide a direct download link in "Custom URL" field if all automated sources fail.
         </p>
         <p>
-          <strong>Storage:</strong> Downloaded files go to the <code className="text-blue-200">firmware/</code> directory and auto-scan for use.
+          <strong>Verification:</strong> Files are checked with MD5 + SHA256 during download (on-the-fly, no memory spike).
+        </p>
+        <p>
+          <strong>Storage:</strong> Downloaded files go to <code className="text-blue-200">firmware/</code> directory and auto-save to database.
         </p>
       </div>
     </div>
