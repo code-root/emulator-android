@@ -29,6 +29,9 @@ _SAMSUNG_AVD_DEVICE_NAMES = {
     "SM-N986U": "Samsung Galaxy Note 20 Ultra",
 }
 
+# Samsung AVD hardware profile — fallback to pixel_6 if not available
+_AVD_SAMSUNG_HW_DEVICE = "pixel_6"
+
 
 def _is_samsung_fingerprint_hw(
     manufacturer: Optional[str], brand: Optional[str], device_model: Optional[str]
