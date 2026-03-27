@@ -1,13 +1,14 @@
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from api.deps import get_current_user
 from config import settings
 from core.fingerprint.generator import DEVICE_PROFILES, DEVICE_CREATION_PRESETS
 from core.fingerprint.geo_database import COUNTRY_DB, list_countries
 from core.firmware.scan import iter_firmware_packages
+from core.firmware.samsung_fota import fetch_latest_firmware
 from db.models import User
 
 router = APIRouter(prefix="/meta", tags=["meta"])
@@ -88,3 +89,29 @@ async def list_device_presets(_user: User = Depends(get_current_user)) -> List[D
         }
         for key, cfg in DEVICE_CREATION_PRESETS.items()
     ]
+
+
+@router.get("/samsung-firmware")
+async def get_samsung_firmware(
+    model: str,
+    csc: str = "XEU",
+    _user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Fetch latest Samsung firmware versions from FOTA servers.
+
+    Query params:
+    - model: Samsung model code (e.g. "SM-S921B", "SM-A556B")
+    - csc: Customer Service Center / region code (default: "XEU"). Examples: "XEU", "BTU", "KSA", "UAE", "EGY", "XSP"
+
+    Returns: {"model", "csc", "ap_version", "csc_version", "full_version"}
+
+    Note: This is a public API call to Samsung's FOTA server. Firmware versions are verified real from the live server.
+    """
+    try:
+        result = await fetch_latest_firmware(model, csc)
+        return result
+    except ValueError as e:
+        raise HTTPException(404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(500, detail=f"Firmware fetch failed: {e}")

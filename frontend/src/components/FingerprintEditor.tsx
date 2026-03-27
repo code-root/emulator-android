@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Shuffle, Save, Send, Loader2, AlertCircle } from 'lucide-react'
+import { Shuffle, Save, Send, Loader2, AlertCircle, Download } from 'lucide-react'
 import {
   getFingerprint,
   updateFingerprint,
@@ -9,6 +9,7 @@ import {
   getDeviceProfiles,
   listCountries,
   randomizeFingerprintWithCountry,
+  fetchSamsungFirmware,
 } from '../api/client'
 import type { DeviceFingerprint } from '../types'
 import clsx from 'clsx'
@@ -31,6 +32,20 @@ function validate(fp: Partial<DeviceFingerprint>): string | null {
   return null
 }
 
+const CSC_CODES = ['XEU', 'BTU', 'XSP', 'XEF', 'KSA', 'UAE', 'EGY', 'XSA', 'DBT', 'GEN']
+const CSC_LABELS: Record<string, string> = {
+  'XEU': 'Europe (Germany)',
+  'BTU': 'UK',
+  'XSP': 'Spain',
+  'XEF': 'France',
+  'KSA': 'Saudi Arabia',
+  'UAE': 'UAE',
+  'EGY': 'Egypt',
+  'XSA': 'Australia',
+  'DBT': 'Germany (T-Mobile)',
+  'GEN': 'Generic/Unlocked',
+}
+
 export default function FingerprintEditor({ deviceId, isRunning }: Props) {
   const queryClient = useQueryClient()
   const [form, setForm] = useState<Partial<DeviceFingerprint>>({})
@@ -40,6 +55,7 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
   const [selectedCountry, setSelectedCountry] = useState<string>('')
   const [countrySearch, setCountrySearch] = useState<string>('')
   const [showCountryDropdown, setShowCountryDropdown] = useState(false)
+  const [selectedCsc, setSelectedCsc] = useState<string>('XEU')
 
   const { data: fp, isLoading } = useQuery({
     queryKey: ['fingerprint', deviceId],
@@ -77,6 +93,8 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
       build_fingerprint: p.build_fingerprint,
       sdk_version: p.sdk_version,
       android_version: p.android_version,
+      ap_version: p.ap_version ?? prev.ap_version,
+      csc_version: p.csc_version ?? prev.csc_version,
     }))
   }
 
@@ -134,6 +152,23 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
       setError(String(e))
       setStatusMsg(null)
       setApplyDetail(null)
+    },
+  })
+
+  const fetchFirmwareMutation = useMutation({
+    mutationFn: () => fetchSamsungFirmware(form.device_model || 'SM-G996B', selectedCsc),
+    onSuccess: (data) => {
+      setForm((prev) => ({
+        ...prev,
+        ap_version: data.ap_version || prev.ap_version,
+        csc_version: data.csc_version || prev.csc_version,
+      }))
+      setStatusMsg(`Firmware fetched: AP ${data.ap_version}, CSC ${data.csc_version}`)
+      setError(null)
+    },
+    onError: (e: Error) => {
+      setError(`Failed to fetch firmware: ${e.message}`)
+      setStatusMsg(null)
     },
   })
 
@@ -230,6 +265,28 @@ export default function FingerprintEditor({ deviceId, isRunning }: Props) {
             title={!isRunning ? 'Start device to apply' : undefined}
           >
             Randomize + Apply
+          </button>
+          <select
+            value={selectedCsc}
+            onChange={(e) => setSelectedCsc(e.target.value)}
+            className="input text-sm px-2 py-1"
+            disabled={fetchFirmwareMutation.isPending}
+          >
+            {CSC_CODES.map((code) => (
+              <option key={code} value={code}>
+                {code} - {CSC_LABELS[code]}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={() => fetchFirmwareMutation.mutate()}
+            disabled={fetchFirmwareMutation.isPending || !form.device_model}
+            title={!form.device_model ? 'Select a device model first' : undefined}
+          >
+            {fetchFirmwareMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            Fetch Firmware
           </button>
           <button
             type="button"

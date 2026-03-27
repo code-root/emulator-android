@@ -158,6 +158,12 @@ export interface DeviceProfileMeta {
   android_version: string
   ap_version?: string | null
   csc_version?: string | null
+  board?: string | null
+  hardware?: string | null
+  security_patch?: string | null
+  first_api_level?: number | null
+  soc_model?: string | null
+  soc_manufacturer?: string | null
 }
 
 export interface WSMessage {

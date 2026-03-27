@@ -300,6 +300,21 @@ export async function listCountries(): Promise<{ countries: Record<string, Count
   return res.data
 }
 
+export interface SamsungFirmwareInfo {
+  model: string
+  csc: string
+  ap_version: string | null
+  csc_version: string | null
+  full_version: string
+}
+
+export async function fetchSamsungFirmware(model: string, csc: string = 'XEU'): Promise<SamsungFirmwareInfo> {
+  const res = await apiClient.get<SamsungFirmwareInfo>('/api/meta/samsung-firmware', {
+    params: { model, csc },
+  })
+  return res.data
+}
+
 // ─── Fingerprint Randomization ────────────────────────────────────────────
 
 export async function randomizeFingerprintWithCountry(
