@@ -106,17 +106,30 @@ async def start_firmware_download(
         urls_to_try.append(('custom', url))
 
     if job.ap_version:
-        # Add fallback sources
+        # Add primary sources
         for source in settings.FIRMWARE_SOURCES:
+            if source.get("enabled", True):
+                try:
+                    primary_url = source['url_template'].format(
+                        csc=csc.upper(),
+                        model=model.upper(),
+                        ap_version=job.ap_version
+                    )
+                    urls_to_try.append((source['name'], primary_url))
+                except Exception as e:
+                    logger.warning(f"Could not format URL for {source['name']}: {e}")
+
+        # Add user-configured fallback sources
+        for i, fallback_template in enumerate(settings.FIRMWARE_FALLBACK_SOURCES, 1):
             try:
-                fallback_url = source['url_template'].format(
+                fallback_url = fallback_template.format(
                     csc=csc.upper(),
                     model=model.upper(),
                     ap_version=job.ap_version
                 )
-                urls_to_try.append((source['name'], fallback_url))
+                urls_to_try.append((f"Fallback Source {i}", fallback_url))
             except Exception as e:
-                logger.warning(f"Could not format URL for {source['name']}: {e}")
+                logger.warning(f"Could not format fallback URL {i}: {e}")
 
     # Launch background download task
     task = asyncio.create_task(_download_worker(job, urls_to_try))

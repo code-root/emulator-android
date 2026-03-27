@@ -494,23 +494,30 @@ export default function FirmwareManager() {
       {/* Info */}
       <div className="card bg-blue-900/20 border border-blue-800 text-blue-300 text-sm space-y-2">
         <p>
-          <strong>Auto-download:</strong> Fetches firmware metadata from Samsung FOTA servers.
+          <strong>How Downloads Work:</strong>
         </p>
-        <p>
-          <strong>Multiple Sources:</strong> If Samsung CDN is blocked, the system automatically tries these fallback sources:
+        <ol className="list-decimal list-inside space-y-1 ml-2">
+          <li>Fetches firmware metadata from Samsung FOTA</li>
+          <li>Tries Samsung CDN first</li>
+          <li>If blocked, tries user-configured fallback sources</li>
+          <li>If all fail, uses "Custom URL" you provide</li>
+          <li>Verifies file with MD5 + SHA256 (on-the-fly)</li>
+          <li>Saves to <code className="text-blue-200">firmware/</code> and database</li>
+        </ol>
+
+        <p className="mt-3">
+          <strong>Fallback Configuration:</strong>
+        </p>
+        <p className="ml-2">
+          To add custom firmware mirrors, set <code className="text-blue-200">FIRMWARE_FALLBACK_SOURCES</code> environment variable:
           <br/>
-          <code className="text-blue-200 text-xs">
-            Samsung CDN → SamFW Mirror → Sammobile → FirmwareDB (Global)
+          <code className="text-blue-200 text-xs block mt-1 p-2 bg-gray-900 rounded">
+            FIRMWARE_FALLBACK_SOURCES="url1;url2;url3"
           </code>
         </p>
-        <p>
-          <strong>Manual Fallback:</strong> Provide a direct download link in "Custom URL" field if all automated sources fail.
-        </p>
-        <p>
-          <strong>Verification:</strong> Files are checked with MD5 + SHA256 during download (on-the-fly, no memory spike).
-        </p>
-        <p>
-          <strong>Storage:</strong> Downloaded files go to <code className="text-blue-200">firmware/</code> directory and auto-save to database.
+
+        <p className="mt-3">
+          <strong>URL Template Variables:</strong> {'{model}'}, {'{csc}'}, {'{ap_version}'}
         </p>
       </div>
     </div>

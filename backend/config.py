@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
+from typing import Optional, List
 
 
 def detect_android_sdk() -> str:
@@ -83,11 +83,21 @@ class Settings(BaseSettings):
 
     # Firmware download sources — tried in order if primary fails
     FIRMWARE_SOURCES: list[dict] = [
-        {"name": "Samsung CDN", "url_template": "https://cfs4.samsungmobile.com/{csc}/{model}/{ap_version}.zip"},
-        {"name": "SamFW (Mirror 1)", "url_template": "https://mirror.samfw.com/firmware/{model}/{csc}/{ap_version}.zip"},
-        {"name": "Sammobile (Archive)", "url_template": "https://firmware.sammobile.com/{model}-{csc}-{ap_version}.zip"},
-        {"name": "FirmwareDB (Global)", "url_template": "https://firmwaredb.com/download/{model}/{csc}/{ap_version}.zip"},
+        {
+            "name": "Samsung CDN",
+            "url_template": "https://cfs4.samsungmobile.com/{csc}/{model}/{ap_version}.zip",
+            "description": "Official Samsung FOTA server",
+            "enabled": True
+        },
     ]
+
+    # User-provided fallback sources (add your own here or via environment)
+    # Example format:
+    # FIRMWARE_FALLBACK_SOURCES = [
+    #     "https://samfw.com/firmware/{model}/{csc}/{ap_version}",
+    #     "https://firmware-server.local/samsung/{model}_{csc}_{ap_version}.zip",
+    # ]
+    FIRMWARE_FALLBACK_SOURCES: list[str] = os.environ.get("FIRMWARE_FALLBACK_SOURCES", "").split(";") if os.environ.get("FIRMWARE_FALLBACK_SOURCES") else []
 
     # CORS
     CORS_ORIGINS: list[str] = [

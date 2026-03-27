@@ -130,12 +130,23 @@ async def get_firmware_sources(
     Get list of available firmware download sources (primary + fallbacks).
 
     Returns:
-    - sources: List of available sources with names
+    - sources: List of primary sources
+    - fallback_sources_count: Number of user-configured fallbacks
     - description: How sources are tried
     """
+    primary_sources = [
+        {"name": s["name"], "description": s.get("description", "")}
+        for s in settings.FIRMWARE_SOURCES
+        if s.get("enabled", True)
+    ]
+
+    fallback_count = len(settings.FIRMWARE_FALLBACK_SOURCES)
+
     return {
-        "sources": [{"name": s["name"]} for s in settings.FIRMWARE_SOURCES],
-        "description": "Samsung CDN is tried first, then fallback mirrors in order"
+        "sources": primary_sources,
+        "fallback_sources_count": fallback_count,
+        "description": f"Tries primary sources, then {fallback_count} user-configured fallback(s), then custom URL if provided",
+        "how_to_add_fallback": "Set FIRMWARE_FALLBACK_SOURCES environment variable with semicolon-separated URLs"
     }
 
 
