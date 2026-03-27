@@ -202,7 +202,9 @@ async def upload_firmware_file(
         existing.size_bytes = len(data)
         existing.local_path = str(dest_path)
         await db.commit()
-        await db.refresh(existing)
+        # Re-fetch after commit to avoid detached instance error
+        result = await db.execute(select(FirmwareEntry).where(FirmwareEntry.id == existing.id))
+        existing = result.scalar_one_or_none()
         return FirmwareEntryResponse.from_orm(existing)
 
     # Create new entry
@@ -219,7 +221,9 @@ async def upload_firmware_file(
     )
     db.add(entry)
     await db.commit()
-    await db.refresh(entry)
+    # Re-fetch after commit to avoid detached instance error
+    result = await db.execute(select(FirmwareEntry).where(FirmwareEntry.filename == safe_name))
+    entry = result.scalar_one_or_none()
 
     return FirmwareEntryResponse.from_orm(entry)
 
@@ -386,8 +390,15 @@ async def create_firmware_entry(
     )
     db.add(entry)
     await db.commit()
-    await db.refresh(entry)
-    return FirmwareEntryResponse.from_orm(entry)
+    # Re-fetch after commit to get updated values
+    result = await db.execute(
+        select(FirmwareEntry).where(
+            FirmwareEntry.device_model == req.device_model,
+            FirmwareEntry.sales_code == req.sales_code,
+        ).order_by(FirmwareEntry.created_at.desc())
+    )
+    entry = result.scalars().first()
+    return FirmwareEntryResponse.from_orm(entry) if entry else None
 
 
 @router.put("/entries/{entry_id}")
@@ -415,7 +426,9 @@ async def update_firmware_entry(
         setattr(entry, key, value)
 
     await db.commit()
-    await db.refresh(entry)
+    # Re-fetch after commit
+    result = await db.execute(select(FirmwareEntry).where(FirmwareEntry.id == entry_id))
+    entry = result.scalar_one_or_none()
     return FirmwareEntryResponse.from_orm(entry)
 
 
