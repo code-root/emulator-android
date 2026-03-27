@@ -55,6 +55,14 @@ DEVICE_CREATION_PRESETS: Dict[str, Dict[str, Any]] = {
         "ram_mb": 8192,
         "cpu_cores": 8,
     },
+    "samsung_sm_s721b_android14": {
+        "label": "Samsung Galaxy S23 (SM-S721B) · Android 14 · Exynos 2200",
+        "device_model": "SM-S721B",
+        "api_level": 34,
+        "arch": "x86_64",
+        "ram_mb": 8192,
+        "cpu_cores": 8,
+    },
     # A-series presets
     "samsung_sm_a556b_android14": {
         "label": "Samsung Galaxy A55 (SM-A556B) · Android 14 · MediaTek MT6886",
@@ -373,6 +381,25 @@ DEVICE_PROFILES = [
         "build_version_codename": "REL",
     },
     # S23/S21 FE series
+    {
+        "device_model": "SM-S721B",  # Samsung Galaxy S23
+        "manufacturer": "Samsung",
+        "brand": "samsung",
+        "device_codename": "e0s",
+        "board": "kalama",
+        "hardware": "exynos",
+        "build_fingerprint": "samsung/e0sxeea/e0s:14/AP2A.240214.120/S721BXXS3CXJ1:user/release-keys",
+        "sdk_version": 34,
+        "android_version": "14",
+        "ap_version": "S721BXXS3CXJ1",
+        "csc_version": "S721BOXM3CXJ1",
+        "security_patch": "2025-02-01",
+        "first_api_level": 33,
+        "soc_model": "S5E9825",
+        "soc_manufacturer": "Samsung",
+        "cpu_abi_list_spoof": "arm64-v8a,armeabi-v7a,armeabi",
+        "build_version_codename": "REL",
+    },
     {
         "device_model": "SM-S711B",  # Samsung Galaxy S23 FE
         "manufacturer": "Samsung",
