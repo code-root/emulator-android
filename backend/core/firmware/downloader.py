@@ -24,6 +24,8 @@ from aiofiles import open as aio_open
 
 from config import settings
 from core.firmware.samsung_fota import fetch_latest_firmware
+from db.database import SessionLocal
+from db.models import FirmwareEntry
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +171,40 @@ async def _download_worker(job: DownloadJob, url: str) -> None:
 
         job.status = 'done'
         job.progress_pct = 100.0
+
+        # Auto-save to database
+        try:
+            db = SessionLocal()
+            try:
+                # Check if entry already exists by filename
+                existing = db.query(FirmwareEntry).filter(
+                    FirmwareEntry.filename == dest_filename
+                ).first()
+
+                if existing:
+                    # Update existing entry
+                    existing.ap_version = job.ap_version
+                    existing.size_bytes = job.downloaded_bytes
+                    existing.local_path = str(dest_path)
+                else:
+                    # Create new entry
+                    entry = FirmwareEntry(
+                        source='auto',
+                        device_model=job.model,
+                        sales_code=job.csc,
+                        ap_version=job.ap_version,
+                        filename=dest_filename,
+                        size_bytes=job.downloaded_bytes,
+                        local_path=str(dest_path),
+                    )
+                    db.add(entry)
+
+                db.commit()
+                logger.info(f'Firmware entry saved to database: {dest_filename}')
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f'Failed to save firmware entry to database: {e}')
 
     except asyncio.CancelledError:
         job.status = 'cancelled'

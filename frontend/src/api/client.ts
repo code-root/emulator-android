@@ -449,6 +449,74 @@ export async function listFirmwarePackages(): Promise<FirmwarePackageMeta[]> {
   return res.data
 }
 
+// ─── Firmware Entry CRUD ─────────────────────────────────────────────────────
+
+export interface FirmwareEntry {
+  id: number
+  source: string
+  device_model: string
+  sales_code: string
+  ap_version: string | null
+  csc_version: string | null
+  package_variant: string | null
+  country: string | null
+  language: string | null
+  filename: string | null
+  size_bytes: number
+  local_path: string | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface FirmwareEntryCreate {
+  source?: string
+  device_model: string
+  sales_code: string
+  ap_version?: string | null
+  csc_version?: string | null
+  package_variant?: string | null
+  country?: string | null
+  language?: string | null
+  filename?: string | null
+  size_bytes?: number
+  local_path?: string | null
+  notes?: string | null
+}
+
+export async function listFirmwareEntries(
+  model?: string,
+  csc?: string
+): Promise<FirmwareEntry[]> {
+  const params = new URLSearchParams()
+  if (model) params.append('model', model)
+  if (csc) params.append('csc', csc)
+  const res = await apiClient.get<FirmwareEntry[]>('/api/firmware/entries', { params })
+  return res.data
+}
+
+export async function createFirmwareEntry(data: FirmwareEntryCreate): Promise<FirmwareEntry> {
+  const res = await apiClient.post<FirmwareEntry>('/api/firmware/entries', data)
+  return res.data
+}
+
+export async function updateFirmwareEntry(
+  id: number,
+  data: Partial<FirmwareEntryCreate>
+): Promise<FirmwareEntry> {
+  const res = await apiClient.put<FirmwareEntry>(`/api/firmware/entries/${id}`, data)
+  return res.data
+}
+
+export async function deleteFirmwareEntry(id: number): Promise<void> {
+  await apiClient.delete(`/api/firmware/entries/${id}`)
+}
+
+export async function syncFirmwareEntries(): Promise<{ success: boolean; imported: number }> {
+  const res = await apiClient.post('/api/firmware/sync')
+  return res.data
+}
+
 // ─── WebSocket URL helper ──────────────────────────────────────────────────
 /**
  * WebSocket origin:

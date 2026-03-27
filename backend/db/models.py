@@ -189,3 +189,25 @@ class OperationLog(Base):
 
     device = relationship("Device", back_populates="logs")
     user = relationship("User", back_populates="logs")
+
+
+class FirmwareEntry(Base):
+    """Firmware metadata — persists across restarts for manual/cached firmware entries."""
+
+    __tablename__ = "firmware_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source = Column(String(64), nullable=False, index=True)        # "samfw" | "manual" | "auto"
+    filename = Column(String(512), nullable=True, unique=True)     # original zip/dir name
+    device_model = Column(String(64), nullable=False, index=True)  # e.g. "SM-A556B"
+    sales_code = Column(String(8), nullable=False, index=True)     # e.g. "XEU"
+    ap_version = Column(String(128), nullable=True)                # e.g. "A556BXXU3BXJ1"
+    csc_version = Column(String(128), nullable=True)
+    package_variant = Column(String(32), nullable=True)            # "fac" etc.
+    country = Column(String(10), nullable=True)
+    language = Column(String(10), nullable=True)
+    size_bytes = Column(BigInteger, default=0, nullable=False)
+    local_path = Column(String(512), nullable=True)
+    notes = Column(Text, nullable=True)                            # user notes
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

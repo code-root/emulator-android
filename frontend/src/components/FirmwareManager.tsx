@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Download, Trash2, Loader2, AlertCircle, CheckCircle, Play } from 'lucide-react'
+import { Download, Trash2, Loader2, AlertCircle, CheckCircle, Play, RefreshCw, Plus, X, Edit2 } from 'lucide-react'
 import {
   getDeviceProfiles,
   startFirmwareDownload,
@@ -8,8 +8,13 @@ import {
   getFirmwareJob,
   cancelFirmwareJob,
   listFirmwarePackages,
+  listFirmwareEntries,
+  createFirmwareEntry,
+  updateFirmwareEntry,
+  deleteFirmwareEntry,
+  syncFirmwareEntries,
 } from '../api/client'
-import type { FirmwareJob } from '../api/client'
+import type { FirmwareJob, FirmwareEntry } from '../api/client'
 import clsx from 'clsx'
 
 const CSC_CODES = ['XEU', 'BTU', 'XSP', 'XEF', 'KSA', 'UAE', 'EGY', 'XSA', 'DBT', 'GEN']
@@ -35,6 +40,17 @@ export default function FirmwareManager() {
   const [error, setError] = useState<string | null>(null)
   const [pollingJobId, setPollingJobId] = useState<string | null>(null)
 
+  // Manual entry form state
+  const [showManualForm, setShowManualForm] = useState(false)
+  const [manualForm, setManualForm] = useState({
+    device_model: '',
+    sales_code: 'XEU',
+    ap_version: '',
+    csc_version: '',
+    notes: '',
+  })
+  const [editingEntryId, setEditingEntryId] = useState<number | null>(null)
+
   const { data: profiles = [] } = useQuery({
     queryKey: ['device-profiles'],
     queryFn: getDeviceProfiles,
@@ -50,6 +66,12 @@ export default function FirmwareManager() {
     queryKey: ['firmware-packages'],
     queryFn: listFirmwarePackages,
     refetchInterval: 5000,  // Poll packages every 5s
+  })
+
+  const { data: entries = [], refetch: refetchEntries } = useQuery({
+    queryKey: ['firmware-entries'],
+    queryFn: () => listFirmwareEntries(),
+    refetchInterval: 3000,  // Poll entries every 3s
   })
 
   const profileOptions = useMemo(
@@ -81,6 +103,52 @@ export default function FirmwareManager() {
     },
     onError: (e: Error) => {
       setError(String(e))
+    },
+  })
+
+  const createEntryMutation = useMutation({
+    mutationFn: () => createFirmwareEntry({
+      device_model: manualForm.device_model,
+      sales_code: manualForm.sales_code,
+      ap_version: manualForm.ap_version || undefined,
+      csc_version: manualForm.csc_version || undefined,
+      notes: manualForm.notes || undefined,
+    }),
+    onSuccess: () => {
+      setStatusMsg('Firmware entry created successfully')
+      setError(null)
+      setManualForm({ device_model: '', sales_code: 'XEU', ap_version: '', csc_version: '', notes: '' })
+      setShowManualForm(false)
+      queryClient.invalidateQueries({ queryKey: ['firmware-entries'] })
+    },
+    onError: (e: Error) => {
+      setError(String(e))
+      setStatusMsg(null)
+    },
+  })
+
+  const deleteEntryMutation = useMutation({
+    mutationFn: (entryId: number) => deleteFirmwareEntry(entryId),
+    onSuccess: () => {
+      setStatusMsg('Firmware entry deleted')
+      setError(null)
+      queryClient.invalidateQueries({ queryKey: ['firmware-entries'] })
+    },
+    onError: (e: Error) => {
+      setError(String(e))
+    },
+  })
+
+  const syncMutation = useMutation({
+    mutationFn: () => syncFirmwareEntries(),
+    onSuccess: (data) => {
+      setStatusMsg(`Sync complete: ${data.imported} new entries imported`)
+      setError(null)
+      queryClient.invalidateQueries({ queryKey: ['firmware-entries'] })
+    },
+    onError: (e: Error) => {
+      setError(String(e))
+      setStatusMsg(null)
     },
   })
 
@@ -247,10 +315,157 @@ export default function FirmwareManager() {
         </div>
       )}
 
-      {/* Available Packages */}
+      {/* Manual Entry Form */}
+      <div className="card space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-gray-200">Add Firmware Entry</h3>
+          <button
+            onClick={() => setShowManualForm(!showManualForm)}
+            className="text-xs px-2 py-1 rounded bg-blue-900/30 text-blue-300 hover:bg-blue-900/50"
+          >
+            {showManualForm ? 'Cancel' : 'New Entry'}
+          </button>
+        </div>
+
+        {showManualForm && (
+          <div className="space-y-3 border-t border-gray-700 pt-4">
+            <div>
+              <label className="label">Device Model</label>
+              <input
+                type="text"
+                placeholder="e.g., SM-A556B"
+                value={manualForm.device_model}
+                onChange={(e) => setManualForm({ ...manualForm, device_model: e.target.value })}
+                className="input"
+              />
+            </div>
+
+            <div>
+              <label className="label">Region (CSC)</label>
+              <select
+                value={manualForm.sales_code}
+                onChange={(e) => setManualForm({ ...manualForm, sales_code: e.target.value })}
+                className="input"
+              >
+                {CSC_CODES.map((code) => (
+                  <option key={code} value={code}>
+                    {code} - {CSC_LABELS[code]}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label text-xs">AP Version</label>
+                <input
+                  type="text"
+                  placeholder="e.g., A556BXXU3BXJ1"
+                  value={manualForm.ap_version}
+                  onChange={(e) => setManualForm({ ...manualForm, ap_version: e.target.value })}
+                  className="input font-mono text-xs"
+                />
+              </div>
+              <div>
+                <label className="label text-xs">CSC Version</label>
+                <input
+                  type="text"
+                  placeholder="e.g., A556BOXM3BXJ1"
+                  value={manualForm.csc_version}
+                  onChange={(e) => setManualForm({ ...manualForm, csc_version: e.target.value })}
+                  className="input font-mono text-xs"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="label text-xs text-gray-400">Notes</label>
+              <textarea
+                placeholder="Source, URL, or other notes..."
+                value={manualForm.notes}
+                onChange={(e) => setManualForm({ ...manualForm, notes: e.target.value })}
+                className="input font-mono text-xs"
+                rows={2}
+              />
+            </div>
+
+            <button
+              onClick={() => createEntryMutation.mutate()}
+              disabled={!manualForm.device_model || createEntryMutation.isPending}
+              className="btn-primary w-full"
+            >
+              {createEntryMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+              Save Entry
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Database Entries */}
+      {entries.length > 0 && (
+        <div className="card space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold text-gray-200">Firmware Catalog ({entries.length})</h3>
+            <button
+              onClick={() => syncMutation.mutate()}
+              disabled={syncMutation.isPending}
+              className="text-xs px-2 py-1 rounded bg-green-900/30 text-green-300 hover:bg-green-900/50 flex items-center gap-1"
+            >
+              {syncMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+              Sync Disk
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-700">
+                  <th className="text-left py-2 px-2 text-gray-400">Model</th>
+                  <th className="text-left py-2 px-2 text-gray-400">CSC</th>
+                  <th className="text-left py-2 px-2 text-gray-400">AP Version</th>
+                  <th className="text-left py-2 px-2 text-gray-400">Source</th>
+                  <th className="text-left py-2 px-2 text-gray-400">Notes</th>
+                  <th className="text-right py-2 px-2 text-gray-400">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.slice(0, 20).map((entry) => (
+                  <tr key={entry.id} className="border-b border-gray-800 hover:bg-gray-900/50">
+                    <td className="py-2 px-2 text-gray-300 font-mono text-xs">{entry.device_model}</td>
+                    <td className="py-2 px-2 text-gray-300">{entry.sales_code}</td>
+                    <td className="py-2 px-2 text-gray-300 font-mono text-xs">{entry.ap_version || '—'}</td>
+                    <td className="py-2 px-2 text-gray-400 text-xs">
+                      <span className={clsx(
+                        'px-2 py-1 rounded',
+                        entry.source === 'manual' && 'bg-blue-900/30 text-blue-300',
+                        entry.source === 'auto' && 'bg-green-900/30 text-green-300',
+                        entry.source === 'samfw' && 'bg-purple-900/30 text-purple-300',
+                      )}>
+                        {entry.source}
+                      </span>
+                    </td>
+                    <td className="py-2 px-2 text-gray-500 text-xs truncate max-w-xs">{entry.notes || '—'}</td>
+                    <td className="py-2 px-2 text-right">
+                      <button
+                        onClick={() => deleteEntryMutation.mutate(entry.id)}
+                        disabled={deleteEntryMutation.isPending}
+                        className="text-xs text-red-400 hover:text-red-300"
+                      >
+                        {deleteEntryMutation.isPending ? '...' : 'Delete'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Available Packages (Disk Scan) */}
       {packages.length > 0 && (
         <div className="card space-y-4">
-          <h3 className="font-semibold text-gray-200">Available Firmware</h3>
+          <h3 className="font-semibold text-gray-200">Available Firmware (Disk Scan)</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>

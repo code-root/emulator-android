@@ -8,14 +8,20 @@ GET    /api/firmware/jobs              List all active/recent jobs
 GET    /api/firmware/jobs/{job_id}     Get job status + progress
 DELETE /api/firmware/jobs/{job_id}     Cancel a download job
 GET    /api/firmware/packages          List locally available firmware packages
+GET    /api/firmware/entries           List firmware entries from database
+POST   /api/firmware/entries           Create new firmware entry
+PUT    /api/firmware/entries/{id}      Update firmware entry
+DELETE /api/firmware/entries/{id}      Delete firmware entry
+POST   /api/firmware/sync              Scan disk and import new packages to database
 """
 
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-from api.deps import get_current_user
+from api.deps import get_current_user, get_db
 from core.firmware.downloader import (
     DownloadJob,
     cancel_job,
@@ -25,8 +31,9 @@ from core.firmware.downloader import (
 )
 from core.firmware.scan import iter_firmware_packages
 from config import settings
-from db.models import User
+from db.models import User, FirmwareEntry
 from pathlib import Path
+from datetime import datetime
 
 router = APIRouter(prefix="/firmware", tags=["firmware"])
 
@@ -57,6 +64,59 @@ class FirmwareJobResponse(BaseModel):
     md5_hash: Optional[str]
     sha256_hash: Optional[str]
     requires_url: bool
+
+    class Config:
+        from_attributes = True
+
+
+class FirmwareEntryCreate(BaseModel):
+    """Request to create a new firmware entry."""
+
+    source: str = "manual"  # "manual", "samfw", "auto"
+    device_model: str
+    sales_code: str
+    ap_version: Optional[str] = None
+    csc_version: Optional[str] = None
+    package_variant: Optional[str] = None
+    country: Optional[str] = None
+    language: Optional[str] = None
+    filename: Optional[str] = None
+    size_bytes: int = 0
+    local_path: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class FirmwareEntryUpdate(BaseModel):
+    """Request to update a firmware entry."""
+
+    ap_version: Optional[str] = None
+    csc_version: Optional[str] = None
+    package_variant: Optional[str] = None
+    country: Optional[str] = None
+    language: Optional[str] = None
+    size_bytes: Optional[int] = None
+    local_path: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class FirmwareEntryResponse(BaseModel):
+    """Response with firmware entry data."""
+
+    id: int
+    source: str
+    device_model: str
+    sales_code: str
+    ap_version: Optional[str]
+    csc_version: Optional[str]
+    package_variant: Optional[str]
+    country: Optional[str]
+    language: Optional[str]
+    filename: Optional[str]
+    size_bytes: int
+    local_path: Optional[str]
+    notes: Optional[str]
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True
@@ -152,3 +212,177 @@ async def list_available_packages(
     """
     firmware_dir = Path(settings.FIRMWARE_PACKAGES_DIR)
     return iter_firmware_packages(firmware_dir)
+
+
+# ─── Firmware Entry CRUD ──────────────────────────────────────────────────────
+
+
+@router.get("/entries")
+async def list_firmware_entries(
+    model: Optional[str] = None,
+    csc: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> List[FirmwareEntryResponse]:
+    """
+    List firmware entries from database with optional filtering.
+
+    Query params:
+    - model: Filter by device_model (e.g. "SM-A556B")
+    - csc: Filter by sales_code (e.g. "XEU")
+
+    Returns all matching entries sorted by created_at descending.
+    """
+    query = db.query(FirmwareEntry)
+
+    if model:
+        query = query.filter(FirmwareEntry.device_model == model)
+    if csc:
+        query = query.filter(FirmwareEntry.sales_code == csc)
+
+    entries = query.order_by(FirmwareEntry.created_at.desc()).all()
+    return [FirmwareEntryResponse.from_orm(e) for e in entries]
+
+
+@router.post("/entries")
+async def create_firmware_entry(
+    req: FirmwareEntryCreate,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> FirmwareEntryResponse:
+    """
+    Create a new firmware entry manually.
+
+    Used when Samsung FOTA API returns "needs_url" or for manual catalog entries.
+
+    Request body:
+    {
+      "source": "manual",
+      "device_model": "SM-A556B",
+      "sales_code": "XEU",
+      "ap_version": "A556BXXU3BXJ1",
+      "csc_version": "A556BOXM3BXJ1",
+      "notes": "from SamFW.com"
+    }
+    """
+    entry = FirmwareEntry(
+        source=req.source,
+        device_model=req.device_model,
+        sales_code=req.sales_code,
+        ap_version=req.ap_version,
+        csc_version=req.csc_version,
+        package_variant=req.package_variant,
+        country=req.country,
+        language=req.language,
+        filename=req.filename,
+        size_bytes=req.size_bytes,
+        local_path=req.local_path,
+        notes=req.notes,
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return FirmwareEntryResponse.from_orm(entry)
+
+
+@router.put("/entries/{entry_id}")
+async def update_firmware_entry(
+    entry_id: int,
+    req: FirmwareEntryUpdate,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> FirmwareEntryResponse:
+    """
+    Update a firmware entry.
+
+    Path params:
+    - entry_id: ID of the entry to update
+
+    Request body contains only fields to update (others left unchanged).
+    """
+    entry = db.query(FirmwareEntry).filter(FirmwareEntry.id == entry_id).first()
+    if not entry:
+        raise HTTPException(404, f"Firmware entry {entry_id} not found")
+
+    update_data = req.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(entry, key, value)
+
+    db.commit()
+    db.refresh(entry)
+    return FirmwareEntryResponse.from_orm(entry)
+
+
+@router.delete("/entries/{entry_id}")
+async def delete_firmware_entry(
+    entry_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Delete a firmware entry.
+
+    Path params:
+    - entry_id: ID of the entry to delete
+
+    Note: Does NOT delete the actual firmware file (local_path).
+    """
+    entry = db.query(FirmwareEntry).filter(FirmwareEntry.id == entry_id).first()
+    if not entry:
+        raise HTTPException(404, f"Firmware entry {entry_id} not found")
+
+    db.delete(entry)
+    db.commit()
+    return {"success": True, "entry_id": entry_id}
+
+
+@router.post("/sync")
+async def sync_firmware_entries(
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Scan firmware directory and import new packages to database.
+
+    Scans FIRMWARE_PACKAGES_DIR for packages, checks if they already exist
+    in the database (by filename or device_model + sales_code + ap_version),
+    and creates new entries for any newly found packages.
+
+    Returns count of newly imported entries.
+    """
+    firmware_dir = Path(settings.FIRMWARE_PACKAGES_DIR)
+    packages = iter_firmware_packages(firmware_dir)
+
+    imported = 0
+    for pkg in packages:
+        # Check if entry already exists by filename or by model/csc/ap combo
+        existing = None
+        if pkg.get("filename"):
+            existing = db.query(FirmwareEntry).filter(
+                FirmwareEntry.filename == pkg["filename"]
+            ).first()
+
+        if not existing:
+            # Try to match by model + csc + ap_version
+            existing = db.query(FirmwareEntry).filter(
+                FirmwareEntry.device_model == pkg.get("device_model"),
+                FirmwareEntry.sales_code == pkg.get("sales_code"),
+                FirmwareEntry.ap_version == pkg.get("ap_version"),
+            ).first()
+
+        if not existing:
+            # Create new entry
+            entry = FirmwareEntry(
+                source="auto",
+                device_model=pkg.get("device_model"),
+                sales_code=pkg.get("sales_code"),
+                ap_version=pkg.get("ap_version"),
+                csc_version=pkg.get("csc_version"),
+                filename=pkg.get("filename"),
+                size_bytes=pkg.get("size_bytes", 0),
+            )
+            db.add(entry)
+            imported += 1
+
+    db.commit()
+    return {"success": True, "imported": imported}
