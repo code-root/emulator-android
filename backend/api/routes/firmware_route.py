@@ -13,6 +13,7 @@ POST   /api/firmware/entries           Create new firmware entry
 PUT    /api/firmware/entries/{id}      Update firmware entry
 DELETE /api/firmware/entries/{id}      Delete firmware entry
 POST   /api/firmware/sync              Scan disk and import new packages to database
+POST   /api/firmware/upload            Upload firmware file (auto-detect & parse)
 """
 
 from typing import Any, Dict, List, Literal, Optional
