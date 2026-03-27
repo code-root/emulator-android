@@ -21,10 +21,11 @@ from typing import Dict, Literal, Optional
 
 import httpx
 from aiofiles import open as aio_open
+from sqlalchemy import select
 
 from config import settings
 from core.firmware.samsung_fota import fetch_latest_firmware
-from db.database import SessionLocal
+from db.database import AsyncSessionLocal
 from db.models import FirmwareEntry
 
 logger = logging.getLogger(__name__)
@@ -174,12 +175,12 @@ async def _download_worker(job: DownloadJob, url: str) -> None:
 
         # Auto-save to database
         try:
-            db = SessionLocal()
-            try:
+            async with AsyncSessionLocal() as db:
                 # Check if entry already exists by filename
-                existing = db.query(FirmwareEntry).filter(
-                    FirmwareEntry.filename == dest_filename
-                ).first()
+                result = await db.execute(
+                    select(FirmwareEntry).filter(FirmwareEntry.filename == dest_filename)
+                )
+                existing = result.scalar_one_or_none()
 
                 if existing:
                     # Update existing entry
@@ -199,10 +200,8 @@ async def _download_worker(job: DownloadJob, url: str) -> None:
                     )
                     db.add(entry)
 
-                db.commit()
+                await db.commit()
                 logger.info(f'Firmware entry saved to database: {dest_filename}')
-            finally:
-                db.close()
         except Exception as e:
             logger.error(f'Failed to save firmware entry to database: {e}')
 
