@@ -319,7 +319,7 @@ async def list_available_packages(
 
 
 @router.get("/entries")
-async def list_firmware_entries(
+def list_firmware_entries(
     model: Optional[str] = None,
     csc: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -346,7 +346,7 @@ async def list_firmware_entries(
 
 
 @router.post("/entries")
-async def create_firmware_entry(
+def create_firmware_entry(
     req: FirmwareEntryCreate,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
@@ -387,7 +387,7 @@ async def create_firmware_entry(
 
 
 @router.put("/entries/{entry_id}")
-async def update_firmware_entry(
+def update_firmware_entry(
     entry_id: int,
     req: FirmwareEntryUpdate,
     db: Session = Depends(get_db),
@@ -415,7 +415,7 @@ async def update_firmware_entry(
 
 
 @router.delete("/entries/{entry_id}")
-async def delete_firmware_entry(
+def delete_firmware_entry(
     entry_id: int,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
@@ -438,7 +438,7 @@ async def delete_firmware_entry(
 
 
 @router.post("/sync")
-async def sync_firmware_entries(
+def sync_firmware_entries(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
