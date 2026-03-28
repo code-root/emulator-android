@@ -10,6 +10,7 @@ from core.fingerprint.samsung_enhanced import (
     merge_profile_defaults_for_apply,
     samsung_surface_settings_commands,
 )
+from core.fingerprint.samsung_ui_extras import apply_samsung_ui_extras
 from core.fingerprint.anti_detect import anti_detect
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,18 @@ class FingerprintSpoofer:
             except (TypeError, ValueError):
                 results["warnings"].append("battery_level invalid")
 
+        # واجهة اختيارية: APKs من firmware/samsung_extras (مشغّل One UI إن وُجد لدى المستخدم)
+        if is_samsung_fingerprint(fp_merged):
+            try:
+                ui = await apply_samsung_ui_extras(adb_tool, serial, fp_merged)
+                for name in ui.get("installed", []):
+                    results["applied"].append(f"samsung_ui_apk:{name}")
+                if ui.get("home_set"):
+                    results["applied"].append(f"samsung_ui_home:{ui['home_set']}")
+                results["warnings"].extend(ui.get("warnings", []))
+            except Exception as e:
+                results["warnings"].append(f"samsung_ui_extras: {e}")
+
         logger.info(
             f"Fingerprint applied to {serial}: "
             f"{len(results['applied'])} ok, {len(results['failed'])} failed"
@@ -181,6 +194,15 @@ class FingerprintSpoofer:
         failed: List[str] = []
         for prop, value in props.items():
             ok = await adb.try_set_property(serial, prop, value)
+            if ok:
+                applied.append(prop)
+            else:
+                failed.append(prop)
+
+        # تطبيق خصائص Samsung المستخرجة من firmware (~41-60 property)
+        extracted = fp.get("extracted_props") or {}
+        for prop, value in extracted.items():
+            ok = await adb.try_set_property(serial, prop, str(value))
             if ok:
                 applied.append(prop)
             else:

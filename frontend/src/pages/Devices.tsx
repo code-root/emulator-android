@@ -9,7 +9,7 @@ import {
   stopDevice,
   deleteDevice,
   getDevicePresets,
-  getFirmwarePackages,
+  getFirmwareFamilies,
 } from '../api/client'
 import type { Device, DeviceCreateForm, DeviceStatus } from '../types'
 import { formatDistanceToNow } from 'date-fns'
@@ -42,6 +42,8 @@ function CreateDeviceModal({ onClose }: { onClose: () => void }) {
     // افتراضي: Samsung G996B + Android 15 متوافق مع البصمة وصور النظام
     preset: 'samsung_sm_g996b_android15',
     firmware_package: null,
+    emulator_kind: 'avd',
+    host_adb_serial: null,
   })
 
   const { data: presets = [] } = useQuery({
@@ -49,15 +51,18 @@ function CreateDeviceModal({ onClose }: { onClose: () => void }) {
     queryFn: getDevicePresets,
   })
 
-  const { data: firmwarePackages = [] } = useQuery({
-    queryKey: ['firmware-packages'],
-    queryFn: getFirmwarePackages,
+  const { data: firmwareFamilies = [] } = useQuery({
+    queryKey: ['firmware-families'],
+    queryFn: getFirmwareFamilies,
   })
 
   const mutation = useMutation({
     mutationFn: () => {
       const payload = { ...form }
       if (!payload.firmware_package) delete payload.firmware_package
+      if (payload.emulator_kind !== 'physical') {
+        delete payload.host_adb_serial
+      }
       return createDevice(payload)
     },
     onSuccess: () => {
@@ -78,6 +83,67 @@ function CreateDeviceModal({ onClose }: { onClose: () => void }) {
         )}
 
         <div className="space-y-4">
+          <div>
+            <label className="label">نوع الجهاز</label>
+            <select
+              className="input"
+              value={form.emulator_kind ?? 'avd'}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  emulator_kind: e.target.value,
+                  host_adb_serial: e.target.value === 'physical' ? form.host_adb_serial : null,
+                })
+              }
+            >
+              <option value="avd">محاكي محلي (AVD) — بدون هاتف</option>
+              <option value="physical">One UI حقيقي — هاتف سامسونغ (شبكة أو USB)</option>
+            </select>
+            {form.emulator_kind === 'avd' && (
+              <div className="text-xs text-amber-200/90 bg-amber-950/40 border border-amber-900/60 rounded-lg p-3 mt-2 space-y-1.5 leading-relaxed">
+                <p>
+                  <strong className="text-amber-100">لا توجد صورة رسمية من سامسونغ</strong> لمحاكي One UI على الكمبيوتر
+                  مثل صور Google في Android SDK. AVD يشغّل أندرويد Google فقط؛ يمكن تقليد <em>بصمة</em> سامسونغ
+                  للتطبيقات، لكن <strong>الواجهة والروم ليستا One UI الحقيقي</strong>.
+                </p>
+                <p className="text-amber-200/80">
+                  تشغيل روم Odin داخل «إيميليتور افتراضي» محلي موثوق مثل AVD <strong>غير متاح تقنياً</strong> للجمهور
+                  (لا نواة/تعريفات عامة لروم الجهاز). للتجربة السحابية راجع{' '}
+                  <a
+                    href="https://developer.samsung.com/remote-test-lab"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sky-400 hover:underline"
+                  >
+                    Samsung Remote Test Lab
+                  </a>
+                  .
+                </p>
+              </div>
+            )}
+            {form.emulator_kind === 'physical' && (
+              <p className="text-xs text-gray-500 mt-2 leading-relaxed">
+                لـ <strong className="text-gray-400">One UI الحقيقي</strong> يلزم هاتف فعلي.{' '}
+                <strong className="text-gray-400">بدون كابل USB:</strong> فعّل «تصحيح الأخطاء اللاسلكي» على
+                سامسونغ ثم من الحاسوب <code className="text-gray-400">adb connect عنوان_IP:5555</code> وأدخل{' '}
+                <code className="text-gray-400">IP:5555</code> هنا. أو استخدم تسلسل USB من{' '}
+                <code className="text-gray-400">adb devices</code>.
+              </p>
+            )}
+          </div>
+          {form.emulator_kind === 'physical' && (
+            <div>
+              <label className="label">عنوان ADB (USB أو لاسلكي)</label>
+              <input
+                className="input font-mono"
+                placeholder="R58N91ABCDE  أو  192.168.1.20:5555"
+                value={form.host_adb_serial ?? ''}
+                onChange={(e) =>
+                  setForm({ ...form, host_adb_serial: e.target.value.trim() || null })
+                }
+              />
+            </div>
+          )}
           <div>
             <label className="label">Preset (اختياري — مثال Samsung G996B + Android 15)</label>
             <select
@@ -114,18 +180,17 @@ function CreateDeviceModal({ onClose }: { onClose: () => void }) {
               }
             >
               <option value="">بدون — بصمة من الموديل فقط</option>
-              {firmwarePackages.map((fw) => (
-                <option key={fw.filename} value={fw.filename}>
-                  {fw.filename}
-                  {fw.kind === 'directory' ? ' (مجلد)' : ' (ZIP)'}
-                  {fw.ap_version ? ` — AP ${fw.ap_version}` : ''}
+              {firmwareFamilies.map((fw) => (
+                <option key={fw.ap_version} value={fw.ap_file || fw.files?.[0] || ''}>
+                  Samsung {fw.device_model} — AP {fw.ap_version}
                   {fw.sales_code ? ` · ${fw.sales_code}` : ''}
+                  {fw.files && fw.files.length > 1 ? ` (${fw.files.length} ملفات)` : ''}
                 </option>
               ))}
             </select>
             <p className="text-xs text-gray-500 mt-1">
-              ضع الملفات تحت مجلد <code className="text-gray-400">firmware/</code> في المشروع؛ لا تُفلش على AVD،
-              فقط تُحدّث بصمة الجهاز عند الإنشاء.
+              يستخرج خصائص Samsung الحقيقية (~60 property) من ملفات firmware (AP tar.md5) ويطبّقها على المحاكي.
+              المحاكي يعمل بـ AOSP لكن يتصرف كـ Samsung حقيقي أمام جميع التطبيقات.
             </p>
           </div>
           <div>
@@ -197,7 +262,11 @@ function CreateDeviceModal({ onClose }: { onClose: () => void }) {
           <button onClick={onClose} className="btn-secondary flex-1 justify-center">Cancel</button>
           <button
             onClick={() => mutation.mutate()}
-            disabled={!form.name || mutation.isPending}
+            disabled={
+              !form.name ||
+              mutation.isPending ||
+              (form.emulator_kind === 'physical' && !(form.host_adb_serial || '').trim())
+            }
             className="btn-primary flex-1 justify-center"
           >
             {mutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
@@ -346,6 +415,11 @@ export default function Devices() {
                       <div className="flex items-center gap-2">
                         <div className={clsx('w-2 h-2 rounded-full', STATUS_DOT[device.status])} />
                         <span className="font-medium text-gray-100">{device.name}</span>
+                        {device.emulator_kind === 'physical' && (
+                          <span className="ml-2 text-[10px] uppercase px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-200 border border-amber-800/60">
+                            One UI
+                          </span>
+                        )}
                       </div>
                       {device.adb_serial && (
                         <span className="text-xs text-gray-500 font-mono ml-4">{device.adb_serial}</span>

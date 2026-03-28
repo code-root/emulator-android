@@ -283,6 +283,20 @@ export async function getFirmwarePackages(): Promise<FirmwarePackageMeta[]> {
   return res.data
 }
 
+export async function getFirmwareFamilies(): Promise<Array<{
+  device_model: string
+  ap_version: string
+  sales_code?: string
+  csc_version?: string
+  ap_file?: string
+  csc_file?: string
+  files: string[]
+  suggested_presets: string[]
+}>> {
+  const res = await apiClient.get('/api/firmware/families')
+  return res.data
+}
+
 // ─── Countries & GPS/IP ────────────────────────────────────────────────────
 
 export interface CountryData {
