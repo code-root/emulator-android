@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import platform
@@ -15,8 +16,10 @@ from api.deps import get_db, get_current_user
 from db.models import Device, DeviceStatus, User, OperationLog, OperationStatus, DeviceFingerprint, ProxyConfig
 from core.emulator.manager import EmulatorManager
 from core.emulator.avd import normalize_system_image_arch
+from core.emulator.samsung.exynos_emulator import ExynsosCPUEmulator
 from core.tools.adb import ADBTool
 from core.fingerprint.generator import FingerprintGenerator, DEVICE_CREATION_PRESETS, DEVICE_PROFILES
+from core.firmware.ap_buildprop import enrich_fp_data_from_firmware_disk_path
 from core.firmware.samfw import merge_firmware_into_fingerprint, resolve_firmware_meta
 from services.ws_manager import ws_manager
 
@@ -34,6 +37,33 @@ def _default_device_arch() -> str:
     return "x86_64"
 
 
+def _get_exynos_for_device(device_model: str) -> Optional[str]:
+    """تحديد معالج Exynos بناءً على موديل الجهاز"""
+    model_upper = device_model.upper()
+
+    # خريطة الموديلات إلى معالجات Exynos
+    model_to_soc = {
+        "SM-G960": "Exynos8895",   # Galaxy S9
+        "SM-G965": "Exynos8895",   # Galaxy S9+
+        "SM-G973": "Exynos9810",   # Galaxy S10
+        "SM-G975": "Exynos9810",   # Galaxy S10+
+        "SM-G977": "Exynos9810",   # Galaxy S10 5G
+        "SM-G996": "Exynos9810",   # Galaxy S21
+        "SM-S901": "Exynos8895",   # Galaxy S22 (variant)
+        "SM-S921": "Exynos8895",   # Galaxy S22
+        "SM-S926": "Exynos8895",   # Galaxy S22 Ultra
+        "SM-S721": "Exynos8895",   # Galaxy S24
+    }
+
+    # ابحث عن أول 5 أحرف من الموديل
+    for model_prefix, soc in model_to_soc.items():
+        if model_upper.startswith(model_prefix):
+            return soc
+
+    # القيمة الافتراضية
+    return "Exynos8895"
+
+
 class DeviceCreateRequest(BaseModel):
     name: str
     ram_mb: int = 2048
@@ -44,6 +74,9 @@ class DeviceCreateRequest(BaseModel):
     preset: Optional[str] = None
     # اسم ملف ZIP أو مجلد حزمة Odin (تحت FIRMWARE_PACKAGES_DIR)، مثل: ...zip أو G996BXXSJHZA6_G996BOXMJHZA6_XSG
     firmware_package: Optional[str] = None
+    # physical = هاتف سامسونغ حقيقي (One UI) عبر USB أو adb connect — يتطلب host_adb_serial
+    emulator_kind: str = "avd"
+    host_adb_serial: Optional[str] = None
 
 
 class DeviceResponse(BaseModel):
@@ -61,6 +94,8 @@ class DeviceResponse(BaseModel):
     cpu_cores: int
     api_level: int
     arch: str
+    emulator_kind: str = "avd"
+    host_adb_serial: Optional[str] = None
     owner_id: int
     created_at: datetime
     updated_at: datetime
@@ -147,7 +182,18 @@ async def create_device(
             detail=f"Unknown preset '{data.preset}'. Use GET /api/meta/device-presets for valid keys.",
         )
 
+    ek = (data.emulator_kind or "avd").strip().lower()
+    if ek not in ("avd", "physical"):
+        raise HTTPException(status_code=400, detail="emulator_kind must be 'avd' or 'physical'")
+    if ek == "physical":
+        if not (data.host_adb_serial or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail="host_adb_serial is required for physical devices (adb devices → serial)",
+            )
+
     fw_meta = None
+    fw_path: Optional[Path] = None
     if data.firmware_package:
         safe_name = os.path.basename(data.firmware_package.strip())
         fw_path = Path(settings.FIRMWARE_PACKAGES_DIR) / safe_name
@@ -162,6 +208,24 @@ async def create_device(
                 status_code=400,
                 detail="firmware_package name does not match SAMFW ZIP or AP_CSC_SALES folder pattern (see GET /api/meta/firmware-packages)",
             )
+
+        # استخراج خصائص Samsung الحقيقية من AP tar (أو اشتقاقها من البيانات المعروفة)
+        from core.firmware.extractor import find_ap_file, extract_samsung_build_props, derive_samsung_props
+        fw_dir = Path(settings.FIRMWARE_PACKAGES_DIR)
+        ap_file = find_ap_file(fw_dir, fw_meta.get("ap_version", ""))
+        extracted_props = {}
+        if ap_file:
+            extracted_props = extract_samsung_build_props(ap_file)
+        if not extracted_props:
+            extracted_props = derive_samsung_props(
+                fw_meta.get("device_model", ""),
+                fw_meta.get("ap_version", ""),
+                fw_meta.get("csc_version"),
+                fw_meta.get("sales_code"),
+            )
+        if extracted_props:
+            fw_meta["extracted_props"] = extracted_props
+
         # بدون preset صريح: إن وُجد تعريف جاهز لنفس الموديل نطبّقه تلقائياً (مثل SM-G996B)
         if not preset_cfg:
             for key, cfg in DEVICE_CREATION_PRESETS.items():
@@ -200,9 +264,15 @@ async def create_device(
     if fw_meta:
         fp_data = merge_firmware_into_fingerprint(fp_data, fw_meta)
 
+    ap_prop_warnings: List[str] = []
+    if fw_path is not None:
+        ap_prop_warnings = enrich_fp_data_from_firmware_disk_path(fp_data, fw_path)
+
     arch = normalize_system_image_arch(arch)
 
-    avd_name = f"emulator_{data.name.replace(' ', '_').lower()}_{current_user.id}"
+    avd_name: Optional[str] = None
+    if ek == "avd":
+        avd_name = f"emulator_{data.name.replace(' ', '_').lower()}_{current_user.id}"
 
     device = Device(
         name=data.name,
@@ -212,6 +282,8 @@ async def create_device(
         cpu_cores=cpu_cores,
         api_level=api_level,
         arch=arch,
+        emulator_kind=ek,
+        host_adb_serial=(data.host_adb_serial or "").strip() if ek == "physical" else None,
         owner_id=current_user.id,
     )
     db.add(device)
@@ -243,6 +315,11 @@ async def create_device(
         country=fp_data["country"],
         ap_version=fp_data.get("ap_version"),
         csc_version=fp_data.get("csc_version"),
+        extended_json=(
+            json.dumps(fp_data["extended"], ensure_ascii=False)
+            if isinstance(fp_data.get("extended"), dict)
+            else None
+        ),
     )
     db.add(fp)
 
@@ -253,20 +330,77 @@ async def create_device(
     await db.flush()
     await db.refresh(device)
 
-    # Create AVD in background
-    background_tasks.add_task(_create_avd_background, device.id, avd_name, api_level, arch)
+    # إنشاء AVD في الخلفية فقط للمحاكي
+    if ek == "avd" and avd_name:
+        # إذا كان جهاز Samsung، أضف Exynos emulator
+        soc_model = None
+        if fw_meta and "SM-" in fw_meta.get("device_model", ""):
+            # حدد معالج Exynos بناءً على الموديل
+            device_model = fw_meta.get("device_model", "")
+            soc_model = _get_exynos_for_device(device_model)
+
+        background_tasks.add_task(_create_avd_background, device.id, avd_name, api_level, arch, soc_model)
     log_detail = f"Device {data.name} created"
     if fw_meta:
         log_detail += f" | firmware={fw_meta.get('filename')} AP={fw_meta.get('ap_version')} CSC={fw_meta.get('sales_code')}"
+    if ap_prop_warnings:
+        log_detail += " | ap_buildprop=" + "; ".join(ap_prop_warnings[:3])
+        if len(ap_prop_warnings) > 3:
+            log_detail += f" (+{len(ap_prop_warnings) - 3} more)"
     await _log_operation(db, device.id, current_user.id, "create_device", OperationStatus.success, log_detail)
 
     return device
 
 
-async def _create_avd_background(device_id: int, avd_name: str, api_level: int, arch: str):
+async def _create_avd_background(
+    device_id: int,
+    avd_name: str,
+    api_level: int,
+    arch: str,
+    soc_model: Optional[str] = None
+):
+    """إنشاء AVD في الخلفية مع محاكاة Exynos إذا كان جهاز Samsung"""
     from db.database import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
         try:
+            # إذا كان جهاز Samsung، هيّأ محاكي Exynos
+            exynos_info = None
+            if soc_model:
+                logger.info(f"Initializing Exynos emulator for device {device_id}: {soc_model}")
+                try:
+                    exynos = ExynsosCPUEmulator(soc_model)
+                    init_result = await exynos.initialize()
+
+                    if init_result:
+                        exynos_info = {
+                            "soc": soc_model,
+                            "cores": exynos.get_cpu_count(),
+                            "specs": exynos.get_specs(),
+                            "status": "initialized"
+                        }
+                        logger.info(f"Exynos {soc_model} initialized successfully for device {device_id}")
+                    else:
+                        logger.warning(f"Failed to initialize Exynos {soc_model} for device {device_id}")
+                except Exception as e:
+                    logger.error(f"Error initializing Exynos: {e}")
+
+            # Store Exynos info in fingerprint extended_json
+            if exynos_info:
+                fp_row = await db.execute(
+                    select(DeviceFingerprint).where(DeviceFingerprint.device_id == device_id)
+                )
+                fp = fp_row.scalar_one_or_none()
+                if fp:
+                    extended = {}
+                    if fp.extended_json:
+                        try:
+                            extended = json.loads(fp.extended_json)
+                        except:
+                            pass
+                    extended["exynos"] = exynos_info
+                    fp.extended_json = json.dumps(extended, ensure_ascii=False)
+                    await db.flush()
+
             avd = emulator_manager.avd_backend
             fp_row = await db.execute(
                 select(DeviceFingerprint).where(DeviceFingerprint.device_id == device_id)
@@ -390,6 +524,17 @@ async def _start_device_background(device_id: int):
                         )
                         raw.pop("_extended_raw", None)
                         merged = merge_profile_defaults_for_apply(raw)
+
+                        # استخراج خصائص Samsung من firmware إذا كانت متاحة
+                        if fp.ap_version:
+                            from core.firmware.extractor import derive_samsung_props
+                            extra_props = derive_samsung_props(
+                                fp.device_model,
+                                fp.ap_version,
+                                fp.csc_version,
+                            )
+                            merged["extracted_props"] = extra_props
+
                         spoofer = FingerprintSpoofer()
                         adb_tool = ADBTool()
                         report = await spoofer.apply(adb_tool, adb_serial, merged)
