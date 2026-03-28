@@ -25,9 +25,10 @@ _SAMSUNG_TAR = re.compile(
     re.IGNORECASE,
 )
 
-# مجلد أو اسم حزمة مستخرجة: AP_CSC_SALES — مثال: G996BXXSJHZA6_G996BOXMJHZA6_XSG
+# مجلد أو اسم حزمة مستخرجة: AP_CSC_SALES — مثال: G996BXXSJHZA6_G996BOXMJHZA6_XSG أو S921BXXU3CXJ1_S921BOXM3CXJ1_XEU
+# Fixed: Now works for all Samsung models (G996B, S921B, S721B, A556B, etc.)
 _SAMSUNG_AP_CSC_SALES = re.compile(
-    r"^(?P<ap>G996B[A-Z0-9]+)_(?P<csc>G996B[A-Z0-9]+)_(?P<sales>[A-Z]{2,4})$",
+    r"^(?P<ap>(?P<model>[A-Z0-9]{4,6})[A-Z0-9]+)_(?P<csc>[A-Z0-9]+)_(?P<sales>[A-Z]{2,4})$",
     re.IGNORECASE,
 )
 
@@ -121,6 +122,7 @@ def parse_samsung_bundle_dirname(dirname: str) -> Optional[Dict[str, Any]]:
     """
     يطابق مجلدات Odin/SamFw المسمّاة: {AP}_{CSC_full}_{SALES}
     مثال: G996BXXSJHZA6_G996BOXMJHZA6_XSG → SM-G996B، AP، CSC كامل، XSG.
+    مثال آخر: S921BXXU3CXJ1_S921BOXM3CXJ1_XEU → SM-S921B
     """
     name = PurePath(dirname.strip()).name
     m = _SAMSUNG_AP_CSC_SALES.match(name)
@@ -129,11 +131,13 @@ def parse_samsung_bundle_dirname(dirname: str) -> Optional[Dict[str, Any]]:
     ap = m.group("ap").upper()
     csc = m.group("csc").upper()
     sales = m.group("sales").upper()
+    model_code = m.group("model").upper()  # G996B, S921B, S721B, A556B, etc.
+    device_model = f"SM-{model_code}"  # SM-G996B, SM-S921B, etc.
     loc = _SALES_LOCALE.get(sales, (None, None))
     row: Dict[str, Any] = {
         "source": "samsung_bundle_dir",
         "filename": name,
-        "device_model": "SM-G996B",
+        "device_model": device_model,
         "sales_code": sales,
         "ap_version": ap,
         "csc_version": csc,

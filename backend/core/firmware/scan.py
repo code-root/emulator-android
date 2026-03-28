@@ -79,3 +79,57 @@ def iter_firmware_packages(scan_root: Path) -> List[Dict[str, Any]]:
 
     out.sort(key=lambda r: r.get("filename", ""))
     return out
+
+
+def iter_firmware_families(scan_root: Path) -> List[Dict[str, Any]]:
+    """
+    Group firmware packages by device_model + AP version into families.
+    Each family groups AP, BL, CSC, HOME_CSC, etc. files for the same device/version.
+    Returns one entry per family with paths to AP and CSC files.
+    """
+    if not scan_root.is_dir():
+        return []
+
+    all_packages = iter_firmware_packages(scan_root)
+    families: Dict[str, Dict[str, Any]] = {}
+
+    for pkg in all_packages:
+        ap = pkg.get("ap_version")
+        if not ap:
+            continue
+
+        # Family key is based on device model + AP version
+        family_key = (pkg.get("device_model"), ap)
+        if family_key not in families:
+            families[family_key] = {
+                "device_model": pkg.get("device_model"),
+                "ap_version": ap,
+                "sales_code": pkg.get("sales_code"),
+                "csc_version": pkg.get("csc_version"),
+                "ap_file": None,
+                "csc_file": None,
+                "files": [],
+                "suggested_presets": pkg.get("suggested_presets", []),
+                "source": pkg.get("source", ""),
+            }
+
+        filename = pkg.get("filename", "")
+        if filename:
+            families[family_key]["files"].append(filename)
+
+        # Track which file is AP and which is CSC
+        if filename.upper().startswith("AP_"):
+            families[family_key]["ap_file"] = filename
+        elif (
+            filename.upper().startswith("CSC_")
+            and "HOME" not in filename.upper()
+        ):
+            families[family_key]["csc_file"] = filename
+
+    # Sort by AP version (newest first)
+    result = sorted(
+        families.values(),
+        key=lambda x: x.get("ap_version", ""),
+        reverse=True,
+    )
+    return result

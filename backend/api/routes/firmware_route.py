@@ -320,6 +320,27 @@ async def list_available_packages(
     return iter_firmware_packages(firmware_dir)
 
 
+@router.get("/families")
+async def list_firmware_families(
+    _user: User = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
+    """
+    List firmware families grouped by device_model + AP version.
+
+    Groups AP, BL, CSC, HOME_CSC files from the same firmware into one family entry.
+    Each entry includes:
+    - device_model, ap_version, sales_code, csc_version
+    - ap_file: path to AP .tar.md5 file
+    - csc_file: path to CSC file
+    - files: list of all files in the family
+    - suggested_presets: matching device creation presets
+    """
+    from core.firmware.scan import iter_firmware_families
+
+    firmware_dir = Path(settings.FIRMWARE_PACKAGES_DIR)
+    return iter_firmware_families(firmware_dir)
+
+
 # ─── Firmware Entry CRUD ──────────────────────────────────────────────────────
 
 
