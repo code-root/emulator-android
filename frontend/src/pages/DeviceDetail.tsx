@@ -5,7 +5,7 @@ import {
   Play, Square, RotateCcw, ArrowLeft, Loader2,
   Monitor, Fingerprint, AppWindow, Shield, Terminal, ScrollText, Info, Zap
 } from 'lucide-react'
-import { getDevice, startDevice, stopDevice, restartDevice, executeShell } from '../api/client'
+import { getDevice, startDevice, stopDevice, restartDevice, executeShell, getFingerprintFull } from '../api/client'
 import { useWebSocket, useDeviceH264 } from '../hooks/useWebSocket'
 import DeviceScreen from '../components/DeviceScreen'
 import FingerprintEditor from '../components/FingerprintEditor'
@@ -36,6 +36,96 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'frida', label: 'Frida', icon: <Zap className="w-4 h-4" /> },
   { id: 'logs', label: 'Logs', icon: <ScrollText className="w-4 h-4" /> },
 ]
+
+function SamsungCard({ fp }: { fp: { device_model?: string | null; manufacturer?: string | null; android_version?: string | null; sdk_version?: number | null; ap_version?: string | null; csc_version?: string | null; extended?: Record<string, unknown> } }) {
+  const exynos = fp.extended?.exynos as { soc?: string; cores?: number; specs?: { big_cores?: { name: string; count: number; frequency_mhz: number }; little_cores?: { name: string; count: number; frequency_mhz: number }; gpu?: { model: string; frequency_mhz: number }; memory?: { total_mb: number } } } | undefined
+  const ANDROID_TO_ONEUI: Record<string, string> = { '15': '7.0', '14': '6.0', '13': '5.1', '12': '4.1', '11': '3.1' }
+  const oneUiStr = ANDROID_TO_ONEUI[fp.android_version || ''] || ''
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-blue-400 font-bold text-sm tracking-widest uppercase">Samsung</span>
+        <span className="bg-blue-900/40 text-blue-300 text-xs px-2 py-0.5 rounded">{fp.device_model}</span>
+        {oneUiStr && <span className="bg-indigo-900/40 text-indigo-300 text-xs px-2 py-0.5 rounded">One UI {oneUiStr}</span>}
+        <span className="bg-green-900/40 text-green-300 text-xs px-2 py-0.5 rounded">Knox ✓</span>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Firmware info */}
+        <div className="space-y-2">
+          <p className="text-xs text-gray-500 uppercase tracking-wider">Firmware</p>
+          {[
+            ['Model', fp.device_model],
+            ['Android', fp.android_version ? `Android ${fp.android_version} (API ${fp.sdk_version})` : '—'],
+            ['AP Version', fp.ap_version || '—'],
+            ['CSC Version', fp.csc_version || '—'],
+          ].map(([k, v]) => (
+            <div key={String(k)} className="flex justify-between text-sm">
+              <span className="text-gray-400">{k}</span>
+              <span className="text-gray-200 font-mono text-xs">{String(v || '—')}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Exynos CPU */}
+        <div className="space-y-2">
+          <p className="text-xs text-gray-500 uppercase tracking-wider">Exynos Processor</p>
+          {exynos ? (
+            <>
+              {[
+                ['SoC', exynos.soc],
+                ['Total Cores', exynos.cores],
+                ['Big Cores', exynos.specs?.big_cores ? `${exynos.specs.big_cores.count}x ${exynos.specs.big_cores.name} @ ${exynos.specs.big_cores.frequency_mhz} MHz` : '—'],
+                ['Little Cores', exynos.specs?.little_cores ? `${exynos.specs.little_cores.count}x ${exynos.specs.little_cores.name} @ ${exynos.specs.little_cores.frequency_mhz} MHz` : '—'],
+              ].map(([k, v]) => (
+                <div key={String(k)} className="flex justify-between text-sm">
+                  <span className="text-gray-400">{k}</span>
+                  <span className="text-gray-200 font-mono text-xs">{String(v ?? '—')}</span>
+                </div>
+              ))}
+            </>
+          ) : (
+            <p className="text-xs text-gray-600">No Exynos data — create device with firmware preset</p>
+          )}
+        </div>
+
+        {/* GPU */}
+        <div className="space-y-2">
+          <p className="text-xs text-gray-500 uppercase tracking-wider">GPU / Memory</p>
+          {exynos?.specs ? (
+            <>
+              {[
+                ['GPU', exynos.specs.gpu ? `${exynos.specs.gpu.model} @ ${exynos.specs.gpu.frequency_mhz} MHz` : '—'],
+                ['RAM', exynos.specs.memory ? `${exynos.specs.memory.total_mb} MB` : '—'],
+                ['Knox', 'Active ✓'],
+                ['One UI', oneUiStr || '—'],
+              ].map(([k, v]) => (
+                <div key={String(k)} className="flex justify-between text-sm">
+                  <span className="text-gray-400">{k}</span>
+                  <span className="text-gray-200 font-mono text-xs">{String(v ?? '—')}</span>
+                </div>
+              ))}
+            </>
+          ) : (
+            <>
+              {[
+                ['Knox', 'Active ✓'],
+                ['One UI', oneUiStr || '—'],
+                ['Manufacturer', fp.manufacturer || '—'],
+              ].map(([k, v]) => (
+                <div key={String(k)} className="flex justify-between text-sm">
+                  <span className="text-gray-400">{k}</span>
+                  <span className="text-gray-200 font-mono text-xs">{String(v ?? '—')}</span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function ADBConsole({ deviceId, isRunning }: { deviceId: number; isRunning: boolean }) {
   const [input, setInput] = useState('')
@@ -117,6 +207,12 @@ export default function DeviceDetail() {
     queryKey: ['device', deviceId],
     queryFn: () => getDevice(deviceId),
     refetchInterval: 10_000,
+  })
+
+  const { data: fpFull } = useQuery({
+    queryKey: ['fingerprint-full', deviceId],
+    queryFn: () => getFingerprintFull(deviceId),
+    enabled: !!device,
   })
 
   const liveStatus: DeviceStatus = (currentStatus || device?.status || 'created') as DeviceStatus
@@ -269,41 +365,48 @@ export default function DeviceDetail() {
 
       {/* Tab Content */}
       {activeTab === 'overview' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="card space-y-3">
-            <h3 className="font-semibold text-gray-200 mb-3">Device Info</h3>
-            {[
-              ['ID', device.id],
-              ['Status', liveStatus],
-              ['AVD Name', device.avd_name || '—'],
-              ['ADB Serial', device.adb_serial || '—'],
-              ['ADB Port', device.adb_port ? `:${device.adb_port}` : '—'],
-              ['Console Port', device.console_port ? `:${device.console_port}` : '—'],
-              ['PID', device.pid || '—'],
-            ].map(([k, v]) => (
-              <div key={String(k)} className="flex justify-between text-sm">
-                <span className="text-gray-400">{k}</span>
-                <span className="text-gray-200 font-mono">{String(v)}</span>
-              </div>
-            ))}
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="card space-y-3">
+              <h3 className="font-semibold text-gray-200 mb-3">Device Info</h3>
+              {[
+                ['ID', device.id],
+                ['Status', liveStatus],
+                ['AVD Name', device.avd_name || '—'],
+                ['ADB Serial', device.adb_serial || '—'],
+                ['ADB Port', device.adb_port ? `:${device.adb_port}` : '—'],
+                ['Console Port', device.console_port ? `:${device.console_port}` : '—'],
+                ['PID', device.pid || '—'],
+              ].map(([k, v]) => (
+                <div key={String(k)} className="flex justify-between text-sm">
+                  <span className="text-gray-400">{k}</span>
+                  <span className="text-gray-200 font-mono">{String(v)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="card space-y-3">
+              <h3 className="font-semibold text-gray-200 mb-3">Hardware</h3>
+              {[
+                ['API Level', `Android API ${device.api_level}`],
+                ['Architecture', device.arch],
+                ['RAM', `${device.ram_mb} MB`],
+                ['CPU Cores', device.cpu_cores],
+                ['Owner ID', device.owner_id],
+                ['Created', new Date(device.created_at).toLocaleString()],
+                ['Updated', new Date(device.updated_at).toLocaleString()],
+              ].map(([k, v]) => (
+                <div key={String(k)} className="flex justify-between text-sm">
+                  <span className="text-gray-400">{k}</span>
+                  <span className="text-gray-200 font-mono">{String(v)}</span>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="card space-y-3">
-            <h3 className="font-semibold text-gray-200 mb-3">Hardware</h3>
-            {[
-              ['API Level', `Android API ${device.api_level}`],
-              ['Architecture', device.arch],
-              ['RAM', `${device.ram_mb} MB`],
-              ['CPU Cores', device.cpu_cores],
-              ['Owner ID', device.owner_id],
-              ['Created', new Date(device.created_at).toLocaleString()],
-              ['Updated', new Date(device.updated_at).toLocaleString()],
-            ].map(([k, v]) => (
-              <div key={String(k)} className="flex justify-between text-sm">
-                <span className="text-gray-400">{k}</span>
-                <span className="text-gray-200 font-mono">{String(v)}</span>
-              </div>
-            ))}
-          </div>
+
+          {/* Samsung card — only shown for Samsung devices */}
+          {fpFull?.device_model?.startsWith('SM-') && (
+            <SamsungCard fp={fpFull} />
+          )}
         </div>
       )}
 

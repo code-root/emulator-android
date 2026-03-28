@@ -416,8 +416,13 @@ export default function Devices() {
                         <div className={clsx('w-2 h-2 rounded-full', STATUS_DOT[device.status])} />
                         <span className="font-medium text-gray-100">{device.name}</span>
                         {device.emulator_kind === 'physical' && (
-                          <span className="ml-2 text-[10px] uppercase px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-200 border border-amber-800/60">
+                          <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-amber-900/50 text-amber-200 border border-amber-800/60">
                             One UI
+                          </span>
+                        )}
+                        {device.device_model?.startsWith('SM-') && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-300 border border-blue-800/60">
+                            {device.device_model}
                           </span>
                         )}
                       </div>

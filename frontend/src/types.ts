@@ -15,6 +15,12 @@ export interface Device {
   cpu_cores: number
   api_level: number
   arch: string
+  /** avd = Google emulator; physical = real phone (Samsung One UI) via ADB */
+  emulator_kind?: string
+  /** USB/wireless serial from `adb devices` — used when emulator_kind is physical */
+  host_adb_serial?: string | null
+  /** Samsung model e.g. SM-G996B — populated from fingerprint */
+  device_model?: string | null
   owner_id: number
   created_at: string
   updated_at: string
@@ -99,6 +105,8 @@ export interface DeviceCreateForm {
   preset?: string | null
   /** اسم ملف ZIP أو مجلد Odin تحت firmware/ (مثل G996BXXSJHZA6_G996BOXMJHZA6_XSG) */
   firmware_package?: string | null
+  emulator_kind?: string
+  host_adb_serial?: string | null
 }
 
 export interface FirmwarePackageMeta {

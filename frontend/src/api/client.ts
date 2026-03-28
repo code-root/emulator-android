@@ -146,6 +146,11 @@ export async function getFingerprint(id: number): Promise<DeviceFingerprint> {
   return res.data
 }
 
+export async function getFingerprintFull(id: number): Promise<DeviceFingerprint & { extended: Record<string, unknown> }> {
+  const res = await apiClient.get<DeviceFingerprint & { extended: Record<string, unknown> }>(`/api/fingerprint/${id}`)
+  return res.data
+}
+
 export async function updateFingerprint(
   id: number,
   data: Partial<DeviceFingerprint>

@@ -99,6 +99,8 @@ class DeviceResponse(BaseModel):
     owner_id: int
     created_at: datetime
     updated_at: datetime
+    # populated separately from fingerprint
+    device_model: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -148,6 +150,15 @@ async def _log_operation(db: AsyncSession, device_id: int, user_id: int, action:
     await db.flush()
 
 
+def _attach_device_model(device: Device, fp_map: dict) -> DeviceResponse:
+    """Build DeviceResponse with device_model populated from fingerprint map."""
+    resp = DeviceResponse.model_validate(device)
+    fp = fp_map.get(device.id)
+    if fp:
+        resp.device_model = fp.device_model
+    return resp
+
+
 @router.get("", response_model=List[DeviceResponse])
 async def list_devices(
     db: AsyncSession = Depends(get_db),
@@ -159,7 +170,15 @@ async def list_devices(
         result = await db.execute(
             select(Device).where(Device.owner_id == current_user.id).order_by(Device.created_at.desc())
         )
-    return result.scalars().all()
+    devices = result.scalars().all()
+    if not devices:
+        return []
+    device_ids = [d.id for d in devices]
+    fp_result = await db.execute(
+        select(DeviceFingerprint).where(DeviceFingerprint.device_id.in_(device_ids))
+    )
+    fp_map = {fp.device_id: fp for fp in fp_result.scalars().all()}
+    return [_attach_device_model(d, fp_map) for d in devices]
 
 
 @router.post("", response_model=DeviceResponse, status_code=status.HTTP_201_CREATED)
@@ -430,7 +449,15 @@ async def get_device(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return await _get_device_or_404(device_id, db, current_user)
+    device = await _get_device_or_404(device_id, db, current_user)
+    fp_result = await db.execute(
+        select(DeviceFingerprint).where(DeviceFingerprint.device_id == device_id)
+    )
+    fp = fp_result.scalar_one_or_none()
+    resp = DeviceResponse.model_validate(device)
+    if fp:
+        resp.device_model = fp.device_model
+    return resp
 
 
 @router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
