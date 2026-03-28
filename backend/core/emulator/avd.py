@@ -428,8 +428,14 @@ class AVDBackend:
             logger.error(f"AVD creation exception: {e}")
             return False
 
-    async def start_avd(self, device) -> Tuple[bool, Dict[str, Any]]:
-        """Start the emulator process for a device. Returns (success, info_dict)."""
+    async def start_avd(
+        self, device, samsung_props: Optional[Dict[str, str]] = None
+    ) -> Tuple[bool, Dict[str, Any]]:
+        """Start the emulator process for a device. Returns (success, info_dict).
+
+        samsung_props: dict of {prop: value} to inject via -prop at boot time.
+        This is the only way to override ro.* read-only properties.
+        """
         avd_name = device.avd_name
         preferred = settings.ADB_PORT_START + max(0, (device.id or 1) - 1) * 2
         adb_port = device.adb_port or self._find_free_port_near(preferred)
@@ -452,7 +458,11 @@ class AVDBackend:
             "-memory", str(device.ram_mb),
             "-cores", str(device.cpu_cores),
             "-logcat-output", str(instances_dir / "logcat.txt"),
+            "-writable-system",  # allow adb remount + build.prop modification
         ]
+
+        if samsung_props:
+            logger.info(f"Samsung device {device.id}: will modify /system/build.prop after boot ({len(samsung_props)} props)")
 
         env = self._build_env()
         # Isolate emulator runtime files; do NOT set ANDROID_AVD_HOME here — avdmanager

@@ -1,12 +1,9 @@
-# حزم السوفتوير (مرجع البصمة)
+# G996B — XSG (Singapore)
 
-ضع هنا ملفات ZIP بأسماء متوافقة مع نمط SAMFW الشائع، مثلاً:
+اسم المجلد يتبع النمط `AP_CSC_SALES` فيكتشفه الخادم تلقائياً:
 
-`SAMFW.COM_SM-G996B_EGY_G996BXXSJHZC2_fac.zip`
+- **AP:** `G996BXXSJHZA6`
+- **CSC:** `G996BOXMJHZA6`
+- **Sales:** `XSG`
 
-- يكتشفها الـ API عبر `GET /api/meta/firmware-packages`.
-- عند إنشاء جهاز مرّر `firmware_package` باسم الملف فقط (انظر `POST /api/devices`).
-
-**مهم:** هذه الحزم مخصّصة عادةً للأجهزة الحقيقية (Odin) وليست صورة `system.img` لمحاكي Google AVD. المزرعة تستخدمها لمواءمة **AP / CSC / build fingerprint** مع السوفتوير الذي لديك، بينما يعمل المحاكي على **system-images** من Android SDK.
-
-يمكن تغيير المسار بالمتغير `FIRMWARE_PACKAGES_DIR`.
+ضع هنا ملفات Odin المستخرجة (`.tar.md5` وغيرها) إن احتجتها للفلاش اليدوي. للمزرعة يكفي وجود المجلد بهذا الاسم؛ عند `POST /api/devices` مرّر `firmware_package` باسم المجلد فقط.

@@ -519,7 +519,23 @@ async def _start_device_background(device_id: int):
             if not device:
                 return
             owner_id = device.owner_id
-            success, info = await emulator_manager.start(device)
+
+            # Fetch Samsung props to inject at boot via -prop (sets ro.* properties)
+            samsung_boot_props = None
+            fp_row = await db.execute(
+                select(DeviceFingerprint).where(DeviceFingerprint.device_id == device_id)
+            )
+            fp_pre = fp_row.scalar_one_or_none()
+            if fp_pre and fp_pre.device_model and fp_pre.device_model.startswith("SM-"):
+                from core.firmware.extractor import derive_samsung_props
+                samsung_boot_props = derive_samsung_props(
+                    fp_pre.device_model,
+                    fp_pre.ap_version or "",
+                    fp_pre.csc_version,
+                )
+                logger.info(f"Will inject {len(samsung_boot_props)} Samsung props at boot for device {device_id}")
+
+            success, info = await emulator_manager.start(device, samsung_props=samsung_boot_props)
             adb_serial = None
             console_port = None
             if success:

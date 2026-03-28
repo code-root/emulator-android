@@ -70,12 +70,39 @@ async def ensure_legacy_fingerprint_columns() -> None:
         await _sqlite_add_column_if_missing(
             conn, "device_fingerprints", "extended_json", "extended_json TEXT"
         )
+        await _sqlite_add_column_if_missing(
+            conn, "devices", "emulator_kind", "emulator_kind VARCHAR(16) NOT NULL DEFAULT 'avd'"
+        )
+        await _sqlite_add_column_if_missing(
+            conn, "devices", "host_adb_serial", "host_adb_serial VARCHAR(64)"
+        )
+
+
+async def ensure_device_columns_postgres() -> None:
+    """PostgreSQL: أعمدة devices الجديدة (تجاهل إن وُجدت)."""
+    url = settings.DATABASE_URL
+    if url.startswith("sqlite"):
+        return
+    stmts = [
+        "ALTER TABLE devices ADD COLUMN emulator_kind VARCHAR(16) NOT NULL DEFAULT 'avd'",
+        "ALTER TABLE devices ADD COLUMN host_adb_serial VARCHAR(64)",
+    ]
+    async with engine.begin() as conn:
+        for ddl in stmts:
+            try:
+                await conn.execute(text(ddl))
+                logger.info("PostgreSQL migration: %s", ddl[:60])
+            except Exception as e:
+                if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+                    continue
+                logger.debug("PG alter skip (expected if exists): %s", e)
 
 
 async def create_all_tables() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await ensure_legacy_fingerprint_columns()
+    await ensure_device_columns_postgres()
     logger.info("Database tables created successfully")
 
 

@@ -27,8 +27,9 @@ _SAMSUNG_TAR = re.compile(
 
 # مجلد أو اسم حزمة مستخرجة: AP_CSC_SALES — مثال: G996BXXSJHZA6_G996BOXMJHZA6_XSG أو S921BXXU3CXJ1_S921BOXM3CXJ1_XEU
 # Fixed: Now works for all Samsung models (G996B, S921B, S721B, A556B, etc.)
+# Model code format: Letter + 3 digits + Letter (e.g., G996B, S921B, S721B, A556B)
 _SAMSUNG_AP_CSC_SALES = re.compile(
-    r"^(?P<ap>(?P<model>[A-Z0-9]{4,6})[A-Z0-9]+)_(?P<csc>[A-Z0-9]+)_(?P<sales>[A-Z]{2,4})$",
+    r"^(?P<ap>(?P<model>[A-Z]\d{3}[A-Z])[A-Z0-9]+)_(?P<csc>[A-Z0-9]+)_(?P<sales>[A-Z]{2,4})$",
     re.IGNORECASE,
 )
 

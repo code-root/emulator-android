@@ -37,14 +37,32 @@ class FingerprintSpoofer:
         results: Dict[str, List[str]] = {"applied": [], "failed": [], "warnings": []}
 
         # Try to get root access first
+        remounted = False
         try:
             await adb_tool.root(serial)
             await asyncio.sleep(2)
-            await adb_tool.remount(serial)
+            remount_out = await adb_tool.remount(serial)
+            remounted = "remount succeeded" in (remount_out or "").lower() or "already" in (remount_out or "").lower()
         except Exception as e:
             results["warnings"].append(f"Could not get root: {e}. Some props may not apply.")
 
         fp_merged = merge_profile_defaults_for_apply(fingerprint_data)
+
+        # For Samsung devices with writable system: write props to /system/build.prop
+        # This is the only reliable way to set ro.* read-only properties
+        if is_samsung_fingerprint(fp_merged) and remounted:
+            bpatch_result = await self._patch_system_build_prop(adb_tool, serial, fp_merged)
+            if bpatch_result.get("patched"):
+                results["applied"].append("system_build_prop_patch")
+                # Auto-reboot to activate ro.* props (they only take effect after restart)
+                try:
+                    await adb_tool._run(["-s", serial, "shell", "reboot"], check=False)
+                    logger.info(f"Triggered auto-reboot on {serial} to activate Samsung props")
+                    results["applied"].append("auto_reboot_for_samsung_props")
+                except Exception as re:
+                    logger.warning(f"Auto-reboot failed on {serial}: {re}")
+                    results["warnings"].append("Samsung props written to /system/build.prop — restart device to activate ro.* properties")
+
         prop_results = await self._set_build_props(adb_tool, serial, fp_merged)
         results["applied"].extend(prop_results["applied"])
         results["failed"].extend(prop_results["failed"])
@@ -187,6 +205,86 @@ class FingerprintSpoofer:
             f"{len(results['applied'])} ok, {len(results['failed'])} failed"
         )
         return results
+
+    async def _patch_system_build_prop(
+        self,
+        adb: ADBTool,
+        serial: str,
+        fp: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Write Samsung props directly to /system/build.prop.
+        Requires: -writable-system emulator flag + adb root + adb remount.
+        These props take effect on the NEXT boot (ro.* can't be changed at runtime).
+        """
+        try:
+            # Get the Samsung props to inject
+            samsung_props = build_extended_samsung_prop_map(fp)
+            if not samsung_props:
+                return {"patched": False}
+
+            # Merge derive_samsung_props for knox/oneui props missing from extended map
+            try:
+                from core.firmware.extractor import derive_samsung_props
+                extra = derive_samsung_props(
+                    fp.get("device_model", ""),
+                    fp.get("ap_version", ""),
+                    fp.get("csc_version"),
+                    fp.get("sales_code"),
+                )
+                for k, v in extra.items():
+                    if k not in samsung_props and v:
+                        samsung_props[k] = v
+            except Exception:
+                pass
+
+            # Pull current build.prop
+            current = await adb._run(["-s", serial, "shell", "cat /system/build.prop"], check=False)
+
+            # Build lines to add/replace
+            existing_lines = (current or "").splitlines()
+            existing_keys = set()
+            new_lines = []
+            for line in existing_lines:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    key = line.split("=", 1)[0]
+                    existing_keys.add(key)
+                    # Replace existing key if Samsung wants a different value
+                    if key in samsung_props:
+                        new_lines.append(f"{key}={samsung_props[key]}")
+                    else:
+                        new_lines.append(line)
+                else:
+                    new_lines.append(line)
+
+            # Append missing Samsung props
+            new_lines.append("")
+            new_lines.append("# Samsung properties (injected by emulator-android)")
+            for k, v in samsung_props.items():
+                if k not in existing_keys:
+                    new_lines.append(f"{k}={v}")
+
+            new_content = "\n".join(new_lines) + "\n"
+
+            # Write to a temp file then push to /system/build.prop
+            import tempfile
+            import os
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".prop", delete=False) as f:
+                f.write(new_content)
+                tmp_path = f.name
+
+            try:
+                await adb._run(["-s", serial, "push", tmp_path, "/system/build.prop"], check=False)
+                await adb._run(["-s", serial, "shell", "chmod 644 /system/build.prop"], check=False)
+                logger.info(f"Patched /system/build.prop with {len(samsung_props)} Samsung props on {serial}")
+                return {"patched": True, "props_count": len(samsung_props)}
+            finally:
+                os.unlink(tmp_path)
+
+        except Exception as e:
+            logger.warning(f"Failed to patch /system/build.prop on {serial}: {e}")
+            return {"patched": False, "error": str(e)}
 
     async def _set_build_props(
         self,

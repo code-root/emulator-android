@@ -45,8 +45,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 
-    # Emulator backend
-    EMULATOR_BACKEND: str = "avd"  # avd or qemu
+    # محاكي افتراضي: avd. أجهزة سامسونغ الحقيقية تُضبط لكل جهاز عبر emulator_kind=physical في API وليس هنا.
+    EMULATOR_BACKEND: str = "avd"  # avd (qemu غير مفعّل)
 
     # Android SDK
     AVD_SDK_PATH: str = ""
@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     UPLOADS_DIR: str = ""
     # حزم سوفتوير (ZIP) مثل SAMFW — للمسح ومواءمة البصمة فقط؛ لا تُستخدم كـ system.img لـ AVD
     FIRMWARE_PACKAGES_DIR: str = ""
+    # APKs اختيارية (مشغّل سامسونغ وغيره) — تُثبَّت بعد تطبيق البصمة إن كان الموديل Samsung
+    SAMSUNG_UI_EXTRAS_DIR: str = ""
 
     # Limits
     MAX_INSTANCES: int = 10
@@ -121,8 +123,16 @@ class Settings(BaseSettings):
             self.UPLOADS_DIR = str(root / "uploads")
         if not self.FIRMWARE_PACKAGES_DIR:
             self.FIRMWARE_PACKAGES_DIR = str(root / "firmware")
+        if not self.SAMSUNG_UI_EXTRAS_DIR:
+            self.SAMSUNG_UI_EXTRAS_DIR = str(Path(self.FIRMWARE_PACKAGES_DIR) / "samsung_extras")
         # Ensure directories exist
-        for d in [self.INSTANCES_DIR, self.IMAGES_DIR, self.UPLOADS_DIR, self.FIRMWARE_PACKAGES_DIR]:
+        for d in [
+            self.INSTANCES_DIR,
+            self.IMAGES_DIR,
+            self.UPLOADS_DIR,
+            self.FIRMWARE_PACKAGES_DIR,
+            self.SAMSUNG_UI_EXTRAS_DIR,
+        ]:
             Path(d).mkdir(parents=True, exist_ok=True)
 
 

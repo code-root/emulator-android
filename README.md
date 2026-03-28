@@ -184,6 +184,7 @@ This release focuses on **Samsung-aligned fingerprints**, **clearer AVD hardware
 - **`merge_firmware_into_fingerprint`** updates `ap_version`, `csc_version`, build fingerprint PDA segment; **XSG** maps fingerprint **product** segment to **`o1sxxx`** (non-EEA style).
 - **Tests**: [`backend/tests/test_firmware_xsg.py`](backend/tests/test_firmware_xsg.py).
 - **Create device**: optional **`firmware_package`** (ZIP or folder basename) in API; **web UI** loads options from **`GET /api/meta/firmware-packages`**.
+- **Real Samsung ROM (One UI)**: set **`emulator_kind`**: **`physical`** and **`host_adb_serial`** (first column of `adb devices`) in **`POST /api/devices`** — no AVD is created; the connected phone runs your actual Samsung system.
 
 #### AVD hardware (Android Studio “Properties”)
 
@@ -197,7 +198,7 @@ This release focuses on **Samsung-aligned fingerprints**, **clearer AVD hardware
 
 #### Frontend
 
-- **New device** dialog: **firmware package** dropdown; **default preset** Samsung **G996B + Android 15** where applicable.
+- **New device** dialog: **device type** (AVD vs **physical Samsung / One UI**), **firmware package** dropdown; **default preset** Samsung **G996B + Android 15** where applicable.
 - **Device screen**: touch mode **Auto** (short movement → tap, longer → swipe) for H.264/JPEG surfaces.
 - **Fingerprint editor**: apply result shows **Arabic summary** + expandable **detail** from API.
 - **App Store**: install-to-device flow improvements (loading feedback) where implemented.
@@ -208,7 +209,7 @@ This release focuses on **Samsung-aligned fingerprints**, **clearer AVD hardware
 
 #### Limitations (unchanged but explicit)
 
-- **Google AVD system image** remains **AOSP / Google APIs** — not a Samsung stock ROM. Deep Samsung-only behavior may still require **physical devices** or **heavy Frida** per app.
+- **Google AVD system image** remains **AOSP / Google APIs** — not a Samsung stock ROM. For **real One UI**, create a device with **`emulator_kind=physical`** and a USB (or `adb connect`) serial; otherwise **heavy Frida** per app.
 - **`tag.display` / Google APIs** in AVD metadata cannot become “Samsung” without a different system image.
 
 ---
@@ -699,6 +700,7 @@ stateDiagram-v2
 - **دمج البصمة** يحدّث `ap_version` / `csc_version` ومقطع الـ PDA في `build_fingerprint`؛ لـ **XSG** يُضبط مقطع المنتج إلى **`o1sxxx`**.
 - **اختبارات**: [`backend/tests/test_firmware_xsg.py`](backend/tests/test_firmware_xsg.py).
 - **إنشاء جهاز**: الحقل **`firmware_package`** في الـ API؛ الواجهة تعرض قائمة من **`GET /api/meta/firmware-packages`**.
+- **روم سامسونغ حقيقي (One UI)**: **`emulator_kind`**: **`physical`** و**`host_adb_serial`** (عمود `adb devices` الأول) في **`POST /api/devices`** — لا يُنشأ AVD؛ الهاتف المتصل يشغّل النظام الفعلي.
 
 #### ملف AVD (خصائص المحاكي في Android Studio)
 
@@ -712,7 +714,7 @@ stateDiagram-v2
 
 #### الواجهة الأمامية
 
-- إنشاء جهاز: قائمة **حزمة فريموير**؛ **افتراضي preset** سامسونج G996B + Android 15 حيث ينطبق.
+- إنشاء جهاز: **نوع الجهاز** (AVD أو **هاتف سامسونغ حقيقي**)، قائمة **حزمة فريموير**؛ **افتراضي preset** سامسونج G996B + Android 15 حيث ينطبق.
 - شاشة الجهاز: وضع لمس **تلقائي** (لمسة قصيرة = نقرة، حركة أوضح = سحب).
 - محرر البصمة: بعد Apply تظهر **ملخص عربي** + **تفصيل** من الـ API.
 
@@ -722,8 +724,8 @@ stateDiagram-v2
 
 #### حدود واضحة
 
-- صورة نظام المحاكي تبقى **Google APIs / AOSP** وليست روم Samsung كاملاً.
-- **`tag.display` = Google APIs** لا يتغير بدون تغيير صورة النظام.
+- صورة نظام **المحاكي AVD** تبقى **Google APIs / AOSP** وليست روم Samsung كاملاً — لذلك وُجد وضع **`physical`** للهاتف الحقيقي.
+- **`tag.display` = Google APIs** لا يتغير على AVD بدون تغيير صورة النظام.
 
 ---
 

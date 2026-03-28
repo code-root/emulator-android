@@ -2,9 +2,14 @@ import logging
 from typing import Tuple, Dict, Any, Optional
 
 from core.emulator.avd import AVDBackend
+from core.emulator.physical import PhysicalDeviceBackend
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _device_kind(device) -> str:
+    return (getattr(device, "emulator_kind", None) or "avd").strip().lower()
 
 
 class EmulatorManager:
@@ -12,19 +17,24 @@ class EmulatorManager:
 
     def __init__(self):
         self.avd_backend = AVDBackend()
+        self.physical_backend = PhysicalDeviceBackend()
         # Track running processes: device_id -> asyncio.Process
         self._processes: Dict[int, Any] = {}
 
-    async def start(self, device) -> Tuple[bool, Dict[str, Any]]:
+    async def start(
+        self, device, samsung_props: Optional[Dict[str, Any]] = None
+    ) -> Tuple[bool, Dict[str, Any]]:
         """Start the emulator for the given device record."""
-        backend = settings.EMULATOR_BACKEND
-        if backend == "avd":
-            success, info = await self.avd_backend.start_avd(device)
+        kind = _device_kind(device)
+        if kind == "physical":
+            success, info = await self.physical_backend.attach(device)
+        elif settings.EMULATOR_BACKEND == "avd":
+            success, info = await self.avd_backend.start_avd(device, samsung_props=samsung_props)
         else:
-            logger.error(f"Unknown emulator backend: {backend}")
+            logger.error("Unknown EMULATOR_BACKEND: %s", settings.EMULATOR_BACKEND)
             return False, {}
 
-        if success and "process" in info:
+        if success and info.get("process"):
             self._processes[device.id] = info.pop("process")
 
         if success and info.get("adb_serial"):
@@ -57,8 +67,8 @@ class EmulatorManager:
 
     async def stop(self, device) -> bool:
         """Stop the emulator for the given device."""
-        # Try graceful ADB shutdown first
-        if device.adb_serial:
+        # لا نُطفئ هاتفاً حقيقياً — فقط إيقاف محاكي AVD
+        if _device_kind(device) != "physical" and device.adb_serial:
             try:
                 from core.tools.adb import ADBTool
                 adb = ADBTool()
@@ -83,6 +93,16 @@ class EmulatorManager:
 
     async def get_status(self, device) -> str:
         """Get emulator status."""
+        if _device_kind(device) == "physical" and device.adb_serial:
+            from core.tools.adb import ADBTool
+            adb = ADBTool()
+            try:
+                out = await adb.shell(device.adb_serial, "getprop sys.boot_completed")
+                if out.strip() == "1":
+                    return "running"
+            except Exception:
+                pass
+            return "stopped"
         proc = self._processes.get(device.id)
         if proc is not None:
             if proc.returncode is None:
