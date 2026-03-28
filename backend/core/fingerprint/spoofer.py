@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import telnetlib
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.tools.adb import ADBTool
@@ -11,7 +12,14 @@ from core.fingerprint.samsung_enhanced import (
     samsung_surface_settings_commands,
 )
 from core.fingerprint.samsung_ui_extras import apply_samsung_ui_extras
+from core.fingerprint.samsung_app_installer import (
+    install_samsung_apps,
+    set_samsung_defaults,
+    configure_knox_security,
+    apply_samsung_ui_theme,
+)
 from core.fingerprint.anti_detect import anti_detect
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +137,50 @@ class FingerprintSpoofer:
                 results["warnings"].extend(ui.get("warnings", []))
             except Exception as e:
                 results["warnings"].append(f"samsung_ui_extras: {e}")
+
+            # المرحلة الجديدة: تثبيت تطبيقات Samsung كاملة
+            try:
+                logger.info("Installing Samsung apps and configuration...")
+                fw_dir = Path(settings.FIRMWARE_PACKAGES_DIR)
+
+                # 1. تثبيت التطبيقات الأساسية
+                if fw_dir.exists():
+                    app_result = await install_samsung_apps(
+                        adb_tool, serial, fw_dir, skip_missing=True
+                    )
+                    for app in app_result.get("installed", []):
+                        results["applied"].append(f"samsung_app:{app}")
+                    for app in app_result.get("failed", []):
+                        results["failed"].append(f"samsung_app:{app}")
+                    for app in app_result.get("skipped", []):
+                        results["warnings"].append(f"samsung_app_skipped:{app}")
+
+                # 2. تعيين الافتراضيات
+                default_result = await set_samsung_defaults(adb_tool, serial)
+                for role in default_result.get("set", []):
+                    results["applied"].append(f"default_{role}")
+                for role in default_result.get("failed", []):
+                    results["warnings"].append(f"default_{role}_failed")
+
+                # 3. تعزيز Knox Security
+                knox_result = await configure_knox_security(adb_tool, serial)
+                for prop in knox_result.get("configured", []):
+                    results["applied"].append(f"knox:{prop.split('=')[0]}")
+                results["warnings"].extend(
+                    [f"knox_failed:{p}" for p in knox_result.get("failed", [])]
+                )
+
+                # 4. تطبيق موضوع One UI
+                theme_result = await apply_samsung_ui_theme(adb_tool, serial)
+                for key in theme_result.get("configured", []):
+                    results["applied"].append(f"theme:{key.split('=')[0]}")
+                results["warnings"].extend(
+                    [f"theme_failed:{k}" for k in theme_result.get("failed", [])]
+                )
+
+            except Exception as e:
+                logger.warning(f"Samsung apps setup error: {e}")
+                results["warnings"].append(f"samsung_setup: {str(e)[:100]}")
 
         logger.info(
             f"Fingerprint applied to {serial}: "
