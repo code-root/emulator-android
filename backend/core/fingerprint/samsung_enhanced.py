@@ -45,22 +45,33 @@ def infer_sales_code_from_csc(csc_version: Optional[str]) -> str:
 
 
 def merge_profile_defaults_for_apply(fp: Dict[str, Any]) -> Dict[str, Any]:
-    """يملأ حقولاً تقنية تُستخدم فقط عند التطبيق (ليست كلها في جدول DB)."""
+    """يملأ حقولاً تقنية تُستخدم فقط عند التطبيق (ليست كلها في جدول DB).
+
+    Generalized to work with ALL Samsung models (previously only SM-G996B).
+    """
     out = dict(fp)
     model = (out.get("device_model") or "").upper()
-    if model != "SM-G996B":
+    if not model.startswith("SM-"):
         return out
-    defaults: Dict[str, Any] = {
-        "security_patch": "2025-01-01",
-        "first_api_level": 30,
-        "soc_model": "SM8350",
-        "soc_manufacturer": "QTI",
-        "cpu_abi_list_spoof": "arm64-v8a,armeabi-v7a,armeabi",
-        "build_version_codename": "REL",
-    }
-    for k, v in defaults.items():
-        if out.get(k) is None:
-            out[k] = v
+
+    # Load defaults from DEVICE_PROFILES for any Samsung model
+    from core.fingerprint.generator import DEVICE_PROFILES
+
+    profile = next(
+        (p for p in DEVICE_PROFILES if p["device_model"].upper() == model),
+        None,
+    )
+    if profile:
+        for k in (
+            "security_patch",
+            "first_api_level",
+            "soc_model",
+            "soc_manufacturer",
+            "cpu_abi_list_spoof",
+            "build_version_codename",
+        ):
+            if out.get(k) is None and profile.get(k):
+                out[k] = profile[k]
     return out
 
 
