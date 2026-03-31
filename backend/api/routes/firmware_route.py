@@ -531,3 +531,117 @@ async def sync_firmware_entries(
 
     await db.commit()
     return {"success": True, "imported": imported}
+
+
+# ── Samsung System Image preparation ─────────────────────────────────────────
+
+class SystemImagePrepRequest(BaseModel):
+    firmware_entry_id: int
+    device_id: Optional[int] = None  # if set, start device with the prepared system image
+
+
+@router.post("/prepare-system-image")
+async def prepare_samsung_system_image(
+    req: SystemImagePrepRequest,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Extract Samsung One UI system.img from AP firmware and prepare it for AVD use.
+
+    Pipeline:
+      AP_*.tar.md5 → super.img → system.img (+ vendor.img)
+      OR: extract Samsung APKs directly for sideloading.
+
+    Returns paths to prepared images and list of extractable Samsung APKs.
+    If device_id is provided, stores the system image path on the device record
+    so the next start uses it via -system flag.
+    """
+    from core.firmware.system_image_prep import SamsungSystemImagePrep
+
+    entry_row = await db.execute(select(FirmwareEntry).where(FirmwareEntry.id == req.firmware_entry_id))
+    entry = entry_row.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(404, "Firmware entry not found")
+
+    fw_dir = Path(settings.FIRMWARE_PACKAGES_DIR)
+    if entry.filename:
+        tar_path = fw_dir / entry.filename
+        firmware_dir = tar_path.parent if tar_path.exists() else fw_dir
+    else:
+        firmware_dir = fw_dir
+
+    work_dir = firmware_dir / "_prep" / (entry.device_model or "unknown")
+    prep = SamsungSystemImagePrep(firmware_dir=firmware_dir, work_dir=work_dir)
+
+    result = await prep.prepare()
+
+    # If APK-only (no simg2img/lpunpack), try lighter extraction
+    if result["mode"] == "none" or not result["apks"]:
+        apks = await prep.extract_apks_only()
+        if apks:
+            result["apks"] = apks
+            if result["mode"] == "none":
+                result["mode"] = "apk_sideload"
+
+    return {
+        "firmware_entry_id": req.firmware_entry_id,
+        "device_model": entry.device_model,
+        "mode": result["mode"],
+        "system_img": result["system_img"],
+        "vendor_img": result["vendor_img"],
+        "boot_img": result["boot_img"],
+        "apks": [
+            {"name": a["name"], "package": a["package"], "path": a["path"]}
+            for a in result["apks"]
+        ],
+        "apks_count": len(result["apks"]),
+        "error": result["error"],
+        "tools_available": {
+            "simg2img": bool(__import__("shutil").which("simg2img")),
+            "lpunpack": bool(__import__("shutil").which("lpunpack")),
+            "lz4":      bool(__import__("shutil").which("lz4")),
+            "debugfs":  bool(__import__("shutil").which("debugfs")),
+        },
+    }
+
+
+@router.post("/install-samsung-apks/{device_id}")
+async def install_samsung_apks_on_device(
+    device_id: int,
+    apk_paths: List[str],
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Sideload extracted Samsung APKs onto a running device.
+    apk_paths: list of absolute paths returned by prepare-system-image.
+    """
+    from db.models import Device
+    from core.tools.adb import ADBTool
+
+    device_row = await db.execute(select(Device).where(Device.id == device_id))
+    device = device_row.scalar_one_or_none()
+    if not device:
+        raise HTTPException(404, "Device not found")
+    if not device.adb_serial:
+        raise HTTPException(400, "Device is not running (no adb_serial)")
+
+    adb = ADBTool()
+    installed, failed, skipped = [], [], []
+
+    for apk_path in apk_paths:
+        p = Path(apk_path)
+        if not p.exists():
+            skipped.append(f"{apk_path}: file not found")
+            continue
+        try:
+            out = await adb._run(["-s", device.adb_serial, "install", "-r", "-t", str(p)], check=False)
+            if "Success" in (out or ""):
+                installed.append(p.name)
+            else:
+                failed.append(f"{p.name}: {(out or '')[:100]}")
+        except Exception as e:
+            failed.append(f"{p.name}: {e}")
+
+    return {"installed": installed, "failed": failed, "skipped": skipped}

@@ -22,14 +22,25 @@ class EmulatorManager:
         self._processes: Dict[int, Any] = {}
 
     async def start(
-        self, device, samsung_props: Optional[Dict[str, Any]] = None
+        self,
+        device,
+        samsung_props: Optional[Dict[str, Any]] = None,
+        system_img: Optional[str] = None,
+        vendor_img: Optional[str] = None,
+        wipe_data: bool = False,
     ) -> Tuple[bool, Dict[str, Any]]:
         """Start the emulator for the given device record."""
         kind = _device_kind(device)
         if kind == "physical":
             success, info = await self.physical_backend.attach(device)
         elif settings.EMULATOR_BACKEND == "avd":
-            success, info = await self.avd_backend.start_avd(device, samsung_props=samsung_props)
+            success, info = await self.avd_backend.start_avd(
+                device,
+                samsung_props=samsung_props,
+                system_img=system_img,
+                vendor_img=vendor_img,
+                wipe_data=wipe_data,
+            )
         else:
             logger.error("Unknown EMULATOR_BACKEND: %s", settings.EMULATOR_BACKEND)
             return False, {}

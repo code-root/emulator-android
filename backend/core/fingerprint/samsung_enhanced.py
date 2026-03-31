@@ -34,13 +34,22 @@ def samsung_apply_user_notes(is_samsung: bool) -> tuple[Optional[str], Optional[
 
 def infer_sales_code_from_csc(csc_version: Optional[str]) -> str:
     """
-    من سلسلة مثل G996BOXMJHZC2 يُستخرج غالباً كود CSC ثلاثي (مثل OXM).
+    Extract 3-char CSC sales code from a Samsung CSC version string.
+    Handles all Samsung model prefixes: G996B, S921B, S928B, A546B, etc.
+    Examples:
+      G996BOXMJHZC2  → OXM
+      S921BXXU3AWF1  → XXU (global)
+      S928BXXS2AXE2  → XXS (global)
+      A546BOXM7CXD1  → OXM
     """
     if not csc_version or len(csc_version) < 8:
         return "OXM"
-    # بعد بادئة G996B (5 أحرف) غالباً يأتي CSC
-    if re.match(r"^G996B", csc_version, re.I):
-        return csc_version[5:8].upper()
+    # Samsung CSC version format: <ModelPrefix><SalesCode><BuildID>
+    # ModelPrefix is usually 5 chars (e.g. G996B, S921B, S928B, A546B, F926B)
+    # Then 3-char sales code follows
+    m = re.match(r"^[A-Z0-9]{5}([A-Z0-9]{3})", csc_version, re.I)
+    if m:
+        return m.group(1).upper()
     return "OXM"
 
 
@@ -204,14 +213,47 @@ def build_extended_samsung_prop_map(fp: Dict[str, Any]) -> Dict[str, str]:
     add("ro.samsung.device", codename)
     add("ro.samsung.build.version", release)
 
-    # Knox / أمان ظاهري (قيم شائعة على أجهزة مبيعات)
-    add("ro.boot.warranty_bit", "1")
-    add("ro.boot.flash.locked", "1")
-    add("ro.securestorage.support", "true")
-    add("ro.config.tima", "1")
+    # ——— Knox / Samsung security layer ———
+    # These mirror the properties KnoxPatch hooks intercept to restore Knox app functionality
+    add("knox.supported", "1")
+    add("knox.fbe.support", "1")
+    add("knox.kap.support", "1")
+    add("knox.kdp.support", "1")
+    add("knox.dp.support", "1")
     add("ro.config.knox", "1")
+    add("ro.config.tima", "1")
+    add("ro.config.dm-verity", "false")
+    add("ro.securestorage.support", "true")
+    add("ro.hardware.keystore", "samsung")
+    add("ro.hardware.keystore_desede", "samsung")
+    add("ro.boot.warranty_bit", "0")        # 0 = warranty intact
+    add("ro.warranty_bit", "0")
+    add("ro.boot.flash.locked", "1")        # bootloader locked = 1
+    add("ro.boot.veritymode", "enforcing")
+    # Knox version strings (Samsung Knox 3.x on Android 13+, 4.x on Android 14+)
+    _knox_ver = "3.9" if int(release.split(".")[0]) <= 13 else "4.2"
+    add("ro.knox.version", _knox_ver)
+    add("ro.knox.knoxSDKVersion", _knox_ver)
+    add("ro.knox.baps.enrolled", "false")
+    add("ro.knox.baps.afw_enabled", "false")
+    # Samsung keystore TEE
+    add("ro.crypto.type", "file")
+    add("ro.crypto.state", "encrypted")
+    add("ro.crypto.uses_ext4_encryption", "true")
+    # Samsung Health / sensors (checked by Samsung Health app)
+    add("ro.hardware.sensors", "samsung")
+    add("ro.sensor.accel", "1")
+    add("ro.sensor.gyro", "1")
+    add("ro.sensor.hr", "0")               # heart rate sensor — not on all models
+    # Samsung DEX
+    add("ro.samsung.dex.mode", "standalone")
+    add("sys.samsung.dex.enable", "1")
+    # Misc Samsung flags checked by various Samsung apps
+    add("ro.multisim.set_msin_back", "false")
+    add("ro.sf.lcd_density", sdk[:3] if len(sdk) >= 3 else "420")
+    add("persist.sys.samsung.emergencymode", "0")
 
-    # محاولة تقليد Adreno (قد تفشل على x86 AVD — لا ضرر إن رُفضت)
+    # GPU (may be rejected on x86 AVD — harmless)
     add("ro.hardware.egl", "adreno")
     add("ro.opengles.version", "196610")
 

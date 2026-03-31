@@ -555,7 +555,7 @@ export async function uploadFirmwareFile(file: File): Promise<FirmwareEntry> {
 /**
  * WebSocket origin:
  * - If `VITE_API_URL` is set → same host as REST (recommended in dev).
- * - Vite dev without env → `ws://localhost:8000` (matches vite.config proxy target;
+ * - Vite dev without env → `ws://localhost:8001` (matches vite.config proxy target;
  *   avoids `ws://localhost:5173` + flaky /ws proxy and React StrictMode teardown noise).
  * - Production build without env → same host as the page (reverse-proxy deployment).
  */
@@ -565,12 +565,12 @@ function getWebSocketBase(): string {
   }
   if (typeof window !== 'undefined') {
     if (import.meta.env.DEV) {
-      return 'ws://localhost:8000'
+      return 'ws://localhost:8001'
     }
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     return `${protocol}//${window.location.host}`
   }
-  return 'ws://localhost:8000'
+  return 'ws://localhost:8001'
 }
 
 export function getWebSocketUrl(deviceId: number): string {

@@ -419,7 +419,96 @@ Java.perform(function () {
         console.warn("[anti_detect] PackageManager hook failed (non-fatal): " + e);
     }
 
-    console.log("[anti_detect] All hooks installed.");
+    // ── 11. Samsung Knox — bypass attestation checks ──────────────────────
+    // Based on KnoxPatch (salvogiangri/KnoxPatch) hook patterns.
+    // These hooks make Samsung apps believe Knox is present and healthy.
+    try {
+        // KnoxStatus: main Knox presence check used by Samsung Cloud, Health, SmartThings
+        var KnoxStatus = Java.use("com.samsung.android.knox.KnoxStatus");
+        try {
+            KnoxStatus.isKnoxMDMSupported.overload(
+                "android.content.Context"
+            ).implementation = function () { return true; };
+        } catch (_) {}
+        try {
+            KnoxStatus.isKnoxSupported.implementation = function () { return true; };
+        } catch (_) {}
+        console.log("[anti_detect] KnoxStatus hooked ✓");
+    } catch (e) {
+        console.warn("[anti_detect] KnoxStatus hook failed (not on AOSP): " + e);
+    }
+
+    try {
+        // EnterpriseKnoxManager: used by Secure Folder, Samsung Pass
+        var EKM = Java.use("com.samsung.android.knox.EnterpriseKnoxManager");
+        try {
+            EKM.getKnoxVersion.implementation = function () { return "{{knox_version}}"; };
+        } catch (_) {}
+        console.log("[anti_detect] EnterpriseKnoxManager hooked ✓");
+    } catch (e) {
+        console.warn("[anti_detect] EnterpriseKnoxManager hook skipped: " + e);
+    }
+
+    try {
+        // Knox container / Secure Folder attestation
+        var KCM = Java.use("com.samsung.android.knox.KnoxContainerManager");
+        try {
+            KCM.isKnoxContainerSupported.implementation = function () { return true; };
+        } catch (_) {}
+        console.log("[anti_detect] KnoxContainerManager hooked ✓");
+    } catch (e) {
+        console.warn("[anti_detect] KnoxContainerManager hook skipped: " + e);
+    }
+
+    try {
+        // Samsung DeviceManager — checked by Samsung Health for Knox attestation
+        var SDM = Java.use("com.samsung.android.knox.SamsungKnoxManager");
+        try {
+            SDM.getKnoxAPILevel.implementation = function () { return 35; };
+        } catch (_) {}
+        console.log("[anti_detect] SamsungKnoxManager hooked ✓");
+    } catch (e) {
+        console.warn("[anti_detect] SamsungKnoxManager hook skipped: " + e);
+    }
+
+    try {
+        // Samsung Pass / Wallet — blocks on warrant check
+        var WarrantyBit = Java.use("com.samsung.android.knox.warranty.WarrantyBit");
+        try {
+            WarrantyBit.getWarrantyBit.overload().implementation = function () { return 0; };
+        } catch (_) {}
+        console.log("[anti_detect] WarrantyBit hooked ✓");
+    } catch (e) {
+        console.warn("[anti_detect] WarrantyBit hook skipped: " + e);
+    }
+
+    // ── 12. Samsung Health — sensor attestation bypass ───────────────────
+    try {
+        // Samsung Health checks SensorManager for heart rate sensor presence
+        var SamsungHealthPlatform = Java.use("com.samsung.android.sdk.healthdata.HealthDataStore");
+        try {
+            SamsungHealthPlatform.connectService.implementation = function (listener) {
+                console.log("[anti_detect] SHealth connectService intercepted");
+                return this.connectService(listener);
+            };
+        } catch (_) {}
+        console.log("[anti_detect] Samsung Health platform hook ✓");
+    } catch (e) {
+        console.warn("[anti_detect] Samsung Health hook skipped: " + e);
+    }
+
+    // ── 13. Bixby — framework check bypass ───────────────────────────────
+    try {
+        var BixbyService = Java.use("com.samsung.android.bixby.service.BixbyVoiceService");
+        try {
+            BixbyService.isBixbySupported.implementation = function () { return true; };
+        } catch (_) {}
+        console.log("[anti_detect] BixbyVoiceService hook ✓");
+    } catch (e) {
+        console.warn("[anti_detect] Bixby hook skipped: " + e);
+    }
+
+    console.log("[anti_detect] All hooks installed (Samsung Knox layer included).");
 });
 """
 
@@ -453,6 +542,9 @@ def _render_frida_script(fp: Dict[str, Any]) -> str:
     if isinstance(cpu_abilist, str) and "," in cpu_abilist:
         cpu_abi = cpu_abilist.split(",")[0].strip() or cpu_abi
 
+    android_major = int(release.split(".")[0]) if release.split(".")[0].isdigit() else 14
+    knox_ver = "4.2" if android_major >= 14 else "3.9"
+
     substitutions = {
         "{{build_fingerprint}}": fingerprint,
         "{{device_model}}":      model,
@@ -474,6 +566,7 @@ def _render_frida_script(fp: Dict[str, Any]) -> str:
         "{{android_version}}":   release,
         "{{cpu_abi}}":           cpu_abi,
         "{{cpu_abilist}}":       str(cpu_abilist),
+        "{{knox_version}}":      knox_ver,
     }
     script = FRIDA_ANTI_DETECT_SCRIPT
     for placeholder, value in substitutions.items():

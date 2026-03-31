@@ -111,12 +111,27 @@ def derive_samsung_props(
         "ro.csc.sales_code": sales,
         "ro.boot.warranty_bit": "0",
         "ro.warranty_bit": "0",
+        "ro.boot.flash.locked": "1",
+        "ro.boot.veritymode": "enforcing",
+        # Knox security layer
         "knox.supported": "1",
+        "knox.fbe.support": "1",
+        "knox.kap.support": "1",
+        "ro.config.knox": "1",
+        "ro.config.tima": "1",
+        "ro.hardware.keystore": "samsung",
+        "ro.hardware.keystore_desede": "samsung",
+        "ro.knox.version": "4.2" if int(android_ver.split(".")[0]) >= 14 else "3.9",
+        "ro.knox.knoxSDKVersion": "4.2" if int(android_ver.split(".")[0]) >= 14 else "3.9",
+        "ro.securestorage.support": "true",
+        # Ringtones / Samsung audio identity
         "ro.config.ringtone": "Over_the_Horizon.ogg",
         "ro.config.notification_sound": "Skyline.ogg",
         "ro.config.alarm_alert": "Morning_Flower.ogg",
+        # Samsung hardware flags
         "samsung.hardware": "yes",
         "sys.device.type": "phone",
+        "ro.samsung.dex.mode": "standalone",
     }
 
     # Filter out empty values

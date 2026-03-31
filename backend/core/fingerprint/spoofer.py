@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import telnetlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -39,12 +38,17 @@ class FingerprintSpoofer:
         # Try to get root access first
         remounted = False
         try:
-            await adb_tool.root(serial)
-            await asyncio.sleep(2)
-            remount_out = await adb_tool.remount(serial)
-            remounted = "remount succeeded" in (remount_out or "").lower() or "already" in (remount_out or "").lower()
+            root_out = await adb_tool.root(serial)
+            # google_apis_playstore returns "adbd cannot run as root in production builds"
+            root_ok = "restarting" in (root_out or "").lower() or "already" in (root_out or "").lower()
+            if root_ok:
+                await asyncio.sleep(2)
+                remount_out = await adb_tool.remount(serial)
+                remounted = "remount succeeded" in (remount_out or "").lower() or "already" in (remount_out or "").lower()
+            else:
+                results["warnings"].append("adb root not available (google_apis_playstore build) — ro.* props injected at boot via -prop flags instead")
         except Exception as e:
-            results["warnings"].append(f"Could not get root: {e}. Some props may not apply.")
+            results["warnings"].append(f"Could not get root: {e}. ro.* props were injected via -prop at boot.")
 
         fp_merged = merge_profile_defaults_for_apply(fingerprint_data)
 
@@ -54,13 +58,28 @@ class FingerprintSpoofer:
             bpatch_result = await self._patch_system_build_prop(adb_tool, serial, fp_merged)
             if bpatch_result.get("patched"):
                 results["applied"].append("system_build_prop_patch")
-                # Auto-reboot to activate ro.* props (they only take effect after restart)
+                # Reboot to activate ro.* props and wait for device to come back
                 try:
                     await adb_tool._run(["-s", serial, "shell", "reboot"], check=False)
-                    logger.info(f"Triggered auto-reboot on {serial} to activate Samsung props")
-                    results["applied"].append("auto_reboot_for_samsung_props")
+                    logger.info(f"Rebooting {serial} to activate Samsung props...")
+                    # Wait for device to go offline then come back
+                    await asyncio.sleep(15)
+                    deadline = asyncio.get_event_loop().time() + 180
+                    while asyncio.get_event_loop().time() < deadline:
+                        try:
+                            boot = await adb_tool._run(
+                                ["-s", serial, "shell", "getprop", "sys.boot_completed"],
+                                check=False,
+                            )
+                            if (boot or "").strip() == "1":
+                                logger.info(f"Device {serial} rebooted with Samsung props active")
+                                results["applied"].append("samsung_props_reboot_complete")
+                                break
+                        except Exception:
+                            pass
+                        await asyncio.sleep(10)
                 except Exception as re:
-                    logger.warning(f"Auto-reboot failed on {serial}: {re}")
+                    logger.warning(f"Reboot failed on {serial}: {re}")
                     results["warnings"].append("Samsung props written to /system/build.prop — restart device to activate ro.* properties")
 
         prop_results = await self._set_build_props(adb_tool, serial, fp_merged)

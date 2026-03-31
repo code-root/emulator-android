@@ -497,12 +497,12 @@ async def start_device(
 
     device.status = DeviceStatus.booting
     device.adb_serial = None
-    await db.flush()
+    await _log_operation(db, device_id, current_user.id, "start_device", OperationStatus.pending, "Starting emulator")
+    await db.commit()
     await db.refresh(device)
     await ws_manager.broadcast(device_id, {"type": "status", "status": "booting", "device_id": device_id})
 
     background_tasks.add_task(_start_device_background, device_id)
-    await _log_operation(db, device_id, current_user.id, "start_device", OperationStatus.pending, "Starting emulator")
     return device
 
 
@@ -535,7 +535,14 @@ async def _start_device_background(device_id: int):
                 )
                 logger.info(f"Will inject {len(samsung_boot_props)} Samsung props at boot for device {device_id}")
 
-            success, info = await emulator_manager.start(device, samsung_props=samsung_boot_props)
+            # Wipe data only on first start (status=created). Subsequent starts preserve
+            # overlayfs Samsung build.prop patches stored in /data/overlayfs/.
+            is_first_start = device.status == DeviceStatus.created
+            success, info = await emulator_manager.start(
+                device,
+                samsung_props=samsung_boot_props,
+                wipe_data=is_first_start,
+            )
             adb_serial = None
             console_port = None
             if success:
@@ -657,10 +664,10 @@ async def restart_device(
     device.status = DeviceStatus.booting
     device.pid = None
     device.adb_serial = None
-    await db.flush()
+    await _log_operation(db, device_id, current_user.id, "restart_device", OperationStatus.pending)
+    await db.commit()
     await db.refresh(device)
     background_tasks.add_task(_start_device_background, device_id)
-    await _log_operation(db, device_id, current_user.id, "restart_device", OperationStatus.pending)
     return device
 
 

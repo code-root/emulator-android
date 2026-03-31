@@ -17,16 +17,34 @@ def _async_engine_kwargs(database_url: str) -> Dict[str, Any]:
     }
     if database_url.startswith("sqlite"):
         base["poolclass"] = NullPool
-        base["connect_args"] = {"check_same_thread": False}
+        base["connect_args"] = {"check_same_thread": False, "timeout": 30}
         return base
     base["poolclass"] = NullPool
     return base
+
+
+async def _set_sqlite_pragmas(conn):
+    """Enable WAL mode so concurrent reads/writes don't lock each other."""
+    await conn.execute(text("PRAGMA journal_mode=WAL"))
+    await conn.execute(text("PRAGMA synchronous=NORMAL"))
+    await conn.execute(text("PRAGMA busy_timeout=30000"))
 
 
 engine = create_async_engine(
     settings.DATABASE_URL,
     **_async_engine_kwargs(settings.DATABASE_URL),
 )
+
+if settings.DATABASE_URL.startswith("sqlite"):
+    from sqlalchemy import event
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _on_connect(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.close()
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

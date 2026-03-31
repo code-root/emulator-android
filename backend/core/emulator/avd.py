@@ -78,13 +78,12 @@ def write_avd_hardware_overlay(
     manufacturer: Optional[str],
     brand: Optional[str],
     device_model: Optional[str],
+    skin_path: Optional[str] = None,
 ) -> None:
     """
-    يحدّث ~/.android/avd/<name>.avd/config.ini ليطابق هوية سامسونج حقيقية في نافذة خصائص المحاكي
-    (hw.device.manufacturer / الاسم / الشاشة). لا يغيّر system image.
-
-    يستخدم أسماء أجهزة حقيقية (Samsung Galaxy S23 Ultra بدلاً من medium_phone)
-    لتجنب كشف المحاكي.
+    Updates ~/.android/avd/<name>.avd/config.ini with Samsung hardware profile.
+    Covers: display, sensors, NFC, fingerprint, camera, S-Pen, Samsung DEX.
+    Optionally sets skin.path to a Samsung Galaxy Emulator Skin directory.
     """
     if not _is_samsung_fingerprint_hw(manufacturer, brand, device_model):
         return
@@ -92,47 +91,89 @@ def write_avd_hardware_overlay(
     if not cfg.is_file():
         logger.warning("AVD config.ini missing, skip hardware overlay: %s", cfg)
         return
-    w, h, density = _samsung_lcd_for_model(device_model)
 
-    # اختيار اسم الجهاز من الخريطة بناءً على الموديل
-    device_name = _SAMSUNG_AVD_DEVICE_NAMES.get(
-        device_model.upper() if device_model else "",
-        "Samsung Galaxy"  # fallback
-    )
+    # Use rich hardware config from samsung_skin module
+    try:
+        from core.emulator.samsung_skin import get_samsung_hw_config
+        hw_config = get_samsung_hw_config(device_model or "")
+    except Exception:
+        # Fallback to basic config
+        w, h, density = _samsung_lcd_for_model(device_model)
+        device_name = _SAMSUNG_AVD_DEVICE_NAMES.get(
+            (device_model or "").upper(), "Samsung Galaxy"
+        )
+        hw_config = {
+            "hw.device.manufacturer": "Samsung",
+            "hw.device.name": device_name,
+            "hw.lcd.width": str(w),
+            "hw.lcd.height": str(h),
+            "hw.lcd.density": str(density),
+        }
 
     try:
         text = cfg.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         logger.warning("read AVD config failed %s: %s", cfg, e)
         return
-    text = _upsert_avd_config_line(text, "hw.device.manufacturer", "Samsung")
-    text = _upsert_avd_config_line(text, "hw.device.name", device_name)
-    text = _upsert_avd_config_line(text, "hw.lcd.width", str(w))
-    text = _upsert_avd_config_line(text, "hw.lcd.height", str(h))
-    text = _upsert_avd_config_line(text, "hw.lcd.density", str(density))
+
+    # Remove settings that cause gfxstream renderer crashes on macOS
+    _dangerous_keys = {
+        "disk.systemPartition.size",
+        "disk.vendorPartition.size",
+        "disk.dataPartition.path",
+        "test.delayAdbTillBootComplete",
+        "test.monitorAdb",
+        "test.quitAfterBootTimeOut",
+        "userdata.useQcow2",
+        "firstboot.bootFromDownloadableSnapshot",
+        "firstboot.bootFromLocalSnapshot",
+        "firstboot.saveToLocalSnapshot",
+    }
+    lines = text.splitlines(keepends=True)
+    lines = [
+        ln for ln in lines
+        if not any(ln.strip().startswith(k + "=") for k in _dangerous_keys)
+    ]
+    text = "".join(lines)
+
+    # Switch image.sysdir.1 to google_apis (supports adb root → build.prop patching).
+    # google_apis_playstore blocks adb root, so Samsung props can never be applied.
+    # With -gpu off both image types run on macOS 15 without crashing.
+    if "image.sysdir.1" in text and "google_apis_playstore" in text:
+        import re as _re
+        text = _re.sub(
+            r"(image\.sysdir\.1\s*=\s*[^\n]*google_apis)_playstore",
+            r"\1",
+            text,
+        )
+        logger.info("Switched image.sysdir.1 from google_apis_playstore → google_apis for adb root support")
+
+    # Ensure vm.heapSize is a plain number (not "228M" format)
+    text = _upsert_avd_config_line(text, "vm.heapSize", "256")
+
+    for key, val in hw_config.items():
+        text = _upsert_avd_config_line(text, key, val)
+
+    if skin_path:
+        text = _upsert_avd_config_line(text, "skin.path", skin_path)
+        text = _upsert_avd_config_line(text, "skin.dynamic", "yes")
+
     try:
         cfg.write_text(text, encoding="utf-8")
-        logger.info("AVD hardware overlay applied for %s (Samsung / %s → %s)", avd_name, device_model, device_name)
+        logger.info(
+            "AVD hardware overlay applied for %s (Samsung %s, %s sensors/NFC/FP%s)",
+            avd_name, device_model,
+            len(hw_config),
+            ", skin" if skin_path else "",
+        )
     except OSError as e:
         logger.warning("write AVD config failed %s: %s", cfg, e)
 
 
 def sync_avd_hardware_with_fingerprint(avd_name: Optional[str], fp: Any) -> None:
     """
-    بعد حفظ البصمة في DB (إنشاء/تحديث/عشوائي/revert): يحدّث config.ini للمحاكي
-    إن كانت البصمة سامسونج؛ يُستدعى من مسارات API دون انتظار تشغيل الجهاز.
-
-    Policy for non-Samsung fingerprints (Pixel, Xiaomi, generic AOSP …)
-    -------------------------------------------------------------------
-    ``config.ini`` is **left untouched**.  Reasons:
-    - There are no official hw.device definitions for most OEMs in the AVD SDK;
-      patching with a non-existent device id would break the skin/display picker
-      in Android Studio.
-    - The default Google/AOSP device profile created by ``avdmanager`` is already
-      a reasonable fit for Pixel-class fingerprints.
-    - If you need a specific resolution for a Pixel/Xiaomi model, edit
-      ``~/.android/avd/<name>.avd/config.ini`` manually (``hw.lcd.width``,
-      ``hw.lcd.height``, ``hw.lcd.density``).
+    After saving fingerprint to DB: updates config.ini for Samsung devices.
+    Non-Samsung fingerprints are left untouched.
     """
     if not avd_name or fp is None:
         return
@@ -142,6 +183,28 @@ def sync_avd_hardware_with_fingerprint(avd_name: Optional[str], fp: Any) -> None
         getattr(fp, "brand", None),
         getattr(fp, "device_model", None),
     )
+
+
+async def setup_samsung_avd_skin(avd_name: str, device_model: str) -> Optional[str]:
+    """
+    Download (or generate) a Samsung Galaxy Emulator Skin and apply it to the AVD.
+    Returns the skin path if applied, None otherwise.
+    """
+    try:
+        from core.emulator.samsung_skin import ensure_samsung_skin
+        skin_path = await ensure_samsung_skin(device_model)
+        if skin_path:
+            cfg = Path.home() / ".android" / "avd" / f"{avd_name}.avd" / "config.ini"
+            if cfg.is_file():
+                text = cfg.read_text(encoding="utf-8", errors="replace")
+                text = _upsert_avd_config_line(text, "skin.path", skin_path)
+                text = _upsert_avd_config_line(text, "skin.dynamic", "yes")
+                cfg.write_text(text, encoding="utf-8")
+                logger.info("Samsung skin applied to %s: %s", avd_name, skin_path)
+        return skin_path
+    except Exception as e:
+        logger.warning("setup_samsung_avd_skin failed for %s: %s", avd_name, e)
+        return None
 
 
 async def load_fingerprint_hw_fields(device_id: int) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -347,6 +410,61 @@ class AVDBackend:
             write_avd_hardware_overlay(avd_name, manu, brand, model)
         return ok
 
+    async def _resolve_system_image(self, api_level: int, arch: str) -> str:
+        """Return the best installed system image for the requested api_level+arch.
+        Falls back to the highest available api if the requested one is not installed.
+
+        Preference: google_apis > google_apis_playstore
+        google_apis supports 'adb root' + /system/build.prop patching which is required
+        to inject Samsung fingerprint props. With -gpu off both image types run on macOS 15.
+        """
+        requested_plain    = f"system-images;android-{api_level};google_apis;{arch}"
+        requested_playstore = f"system-images;android-{api_level};google_apis_playstore;{arch}"
+        try:
+            env = self._build_env()
+            proc = await asyncio.create_subprocess_exec(
+                self._sdkmanager_bin, "--list_installed",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+            lines = stdout.decode(errors="replace").splitlines()
+            # Prefer plain google_apis (supports adb root → build.prop patching)
+            plain = [
+                l.strip().split()[0] for l in lines
+                if "system-images" in l and f";{arch}" in l
+                and ";google_apis;" in l
+            ]
+            # Fallback: google_apis_playstore
+            playstore = [
+                l.strip().split()[0] for l in lines
+                if "system-images" in l and f";{arch}" in l
+                and "google_apis_playstore" in l and "ps16k" not in l
+            ]
+            installed = plain or playstore
+            if not installed:
+                return requested_plain
+            # Exact match for requested api_level in preferred pool
+            if requested_plain in plain:
+                return requested_plain
+            if requested_playstore in playstore:
+                return requested_playstore
+            # Pick highest api_level from preferred pool
+            def _api(pkg: str) -> int:
+                try:
+                    return int(pkg.split(";")[1].replace("android-", "").split("-")[0])
+                except Exception:
+                    return 0
+            best = max(installed, key=_api)
+            logger.warning(
+                "system-image android-%s not installed; using %s instead", api_level, best
+            )
+            return best
+        except Exception as e:
+            logger.warning("Could not resolve system image: %s", e)
+            return requested
+
     async def create_avd(
         self,
         device_name: str,
@@ -358,7 +476,8 @@ class AVDBackend:
     ) -> bool:
         """Create a new AVD using avdmanager."""
         arch = normalize_system_image_arch(arch)
-        system_image = f"system-images;android-{api_level};google_apis;{arch}"
+        # Find the best available system image for requested api_level
+        system_image = await self._resolve_system_image(api_level, arch)
         logger.info(f"Creating AVD {device_name} with image {system_image}")
 
         # Check if image is installed
@@ -411,7 +530,12 @@ class AVDBackend:
             err_output = stderr.decode(errors="replace")
             if proc.returncode == 0:
                 logger.info(f"AVD {device_name} created successfully (hw.device={hw_profile})")
-                write_avd_hardware_overlay(device_name, manufacturer, brand, device_model)
+                # Apply Samsung hardware config + skin
+                if _is_samsung_fingerprint_hw(manufacturer, brand, device_model):
+                    skin_path = await setup_samsung_avd_skin(device_name, device_model or "")
+                    write_avd_hardware_overlay(device_name, manufacturer, brand, device_model, skin_path)
+                else:
+                    write_avd_hardware_overlay(device_name, manufacturer, brand, device_model)
                 return True
             else:
                 combined = "\n".join(x for x in (output.strip(), err_output.strip()) if x)
@@ -429,12 +553,24 @@ class AVDBackend:
             return False
 
     async def start_avd(
-        self, device, samsung_props: Optional[Dict[str, str]] = None
+        self,
+        device,
+        samsung_props: Optional[Dict[str, str]] = None,
+        system_img: Optional[str] = None,
+        vendor_img: Optional[str] = None,
+        wipe_data: bool = False,
     ) -> Tuple[bool, Dict[str, Any]]:
         """Start the emulator process for a device. Returns (success, info_dict).
 
-        samsung_props: dict of {prop: value} to inject via -prop at boot time.
-        This is the only way to override ro.* read-only properties.
+        wipe_data:     If True, passes -wipe-data to the emulator (clears /data).
+                       Only set on first creation. Regular starts should NOT wipe data —
+                       overlayfs-based Samsung build.prop patches are stored in /data/overlayfs/
+                       and are lost on every -wipe-data, reverting to Google defaults.
+        samsung_props: Samsung ro.* properties to inject into /system/build.prop after boot.
+        system_img:    Path to Samsung system.img (extracted from AP firmware).
+                       Passed via -system flag — replaces AOSP system partition with
+                       real Samsung One UI. Kernel/vendor stay AOSP for compatibility.
+        vendor_img:    Optional Samsung vendor.img path (passed via -vendor flag).
         """
         avd_name = device.avd_name
         preferred = settings.ADB_PORT_START + max(0, (device.id or 1) - 1) * 2
@@ -453,16 +589,29 @@ class AVDBackend:
             "-no-window",
             "-no-snapshot",
             "-ports", f"{console_port},{adb_host_port}",
-            "-wipe-data",
-            "-gpu", "swiftshader_indirect",
+            "-gpu", "off",
+            "-no-metrics",
+            "-accel", "on",
             "-memory", str(device.ram_mb),
             "-cores", str(device.cpu_cores),
             "-logcat-output", str(instances_dir / "logcat.txt"),
-            "-writable-system",  # allow adb remount + build.prop modification
+            "-writable-system",
         ]
 
+        if wipe_data:
+            cmd.append("-wipe-data")
+            logger.info(f"Device {device.id}: starting with -wipe-data (first creation)")
+
+        # Samsung system image: replaces AOSP system partition with real One UI
+        if system_img and Path(system_img).exists():
+            cmd += ["-system", system_img]
+            logger.info("Samsung One UI system image: %s", system_img)
+            if vendor_img and Path(vendor_img).exists():
+                cmd += ["-vendor", vendor_img]
+                logger.info("Samsung vendor image: %s", vendor_img)
+
         if samsung_props:
-            logger.info(f"Samsung device {device.id}: will modify /system/build.prop after boot ({len(samsung_props)} props)")
+            logger.info(f"Samsung device {device.id}: {len(samsung_props)} Samsung props will be patched into /system/build.prop after boot")
 
         env = self._build_env()
         # Isolate emulator runtime files; do NOT set ANDROID_AVD_HOME here — avdmanager
@@ -473,6 +622,17 @@ class AVDBackend:
         if not await self.ensure_avd_exists(device):
             logger.error("Cannot start: AVD %r does not exist and creation failed", avd_name)
             return False, {}
+
+        # Ensure adb server is running before starting emulator
+        try:
+            await asyncio.create_subprocess_exec(
+                self._adb_bin, "start-server",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.sleep(0.5)
+        except Exception:
+            pass
 
         logger.info(f"Starting emulator: {' '.join(cmd)}")
         try:
