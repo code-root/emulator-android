@@ -242,6 +242,16 @@ class FingerprintSpoofer:
             if not samsung_props:
                 return {"patched": False}
 
+            # CRITICAL: Do NOT patch these in build.prop — they break `adb root` permanently.
+            # The Frida script (anti_detect.js) handles them at Java runtime level instead.
+            # TikTok/Twitter use Java SystemProperties.get() which Frida intercepts.
+            _NO_PATCH_IN_BUILDPROP = {
+                "ro.debuggable", "ro.build.type", "ro.build.tags",
+                "ro.adb.secure", "ro.secure",
+            }
+            for k in _NO_PATCH_IN_BUILDPROP:
+                samsung_props.pop(k, None)
+
             # Merge derive_samsung_props for knox/oneui props missing from extended map
             try:
                 from core.firmware.extractor import derive_samsung_props
