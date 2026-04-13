@@ -18,7 +18,7 @@
     "@tanstack/react-query": "^5.20.5",
     "lucide-react": "^0.330.0",
     "clsx": "^2.1.0",
-    "date-fns": "^3.3.1"
+    "date-fns": "^4.1.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.55",
