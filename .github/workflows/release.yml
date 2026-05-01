@@ -47,7 +47,7 @@ jobs:
         continue-on-error: false
 
       - name: Create GitHub Release with assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: ${{ github.ref_name }}
           generate_release_notes: true
